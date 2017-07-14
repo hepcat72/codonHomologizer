@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.1',
+setScriptInfo(VERSION => '1.2',
               CREATED => '6/27/2017',
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
@@ -46,7 +46,7 @@ addOption(GETOPTKEY   => 'm|method=s',
 	  ACCEPTS     => $weighting_methods);
 
 my $seq_file_type =
-  addInfileOption(GETOPTKEY   => 'i|aa-seq-file=s',
+  addInfileOption(GETOPTKEY   => 'i|aa-file=s',
 		  REQUIRED    => 0,
 		  PRIMARY     => 1,
 		  DEFAULT     => undef,
@@ -65,7 +65,7 @@ addOption(GETOPTKEY   => 'f|aa-seq-format=s',
 	  REQUIRED    => 0,
 	  DEFAULT     => $seq_format,
 	  HIDDEN      => 0,
-	  DETAIL_DESC => 'Amino acid sequence file format.',
+	  DETAIL_DESC => 'Amino acid sequence file format.  Applies to files submitted using -i and',
 	  ACCEPTS     => $sequence_formats);
 
 my $codon_file_type =
@@ -257,15 +257,15 @@ END_DETAIL
 	 );
 
 my $prealigned = 0;
-addOption(GETOPTKEY   => 'r|precomputed-alignment=s',
+addOption(GETOPTKEY   => 'r|precomputed-aa-alignment=s',
 	  GETOPTVAL   => \$prealigned,
 	  REQUIRED    => 0,
 	  DEFAULT     => $prealigned,
 	  HIDDEN      => 0,
-	  SMRY_DESC   => ('Treat the input sequence file as pre-aligned.'),
+	  SMRY_DESC   => ('Treat the input AA sequence file as pre-aligned.'),
 	  DETAIL_DESC => << "END_DETAIL"
 
-If you already have an alignment and want to simply generate nucleotide sequences that have as much homology as possible, supply your alignment file using -i and supply this option to prevent the script from stripping the alignment characters (e.g. gaps '-') and re-aligning them.
+If you already have an amino acid alignment and want to simply generate nucleotide sequences from them that have as much homology as possible, supply your AA alignment file using -i and supply this option to prevent the script from stripping the alignment characters (e.g. gaps '-') and re-aligning them.
 
 END_DETAIL
 	 );
@@ -320,6 +320,48 @@ X  0 -1 -1 -1 -2 -1 -1 -1 -1 -1 -1 -1 -1 -1 -2  0  0 -2 -1 -1 -1 -1 -1 -4
 END_FORMAT
 		 );
 
+
+my $eval_file_type =
+  addInfileOption(GETOPTKEY   => 'e|evaluate-nt-aln-file|nt-file=s',
+		  REQUIRED    => 0,
+		  PRIMARY     => 0,
+		  DEFAULT     => undef,
+		  SMRY_DESC   => 'Aligned nucleotide sequence file.',
+		  PAIR_RELAT  => '1',
+		  FORMAT_DESC => << 'END_FORMAT'
+
+The aligned nucleotide sequence file can be in fasta or fastq format.  There must be 2 or more aligned sequences of the same length and they must encode a protein (i.e. the first character must be in the first 5'->3' frame).  It may be upper or lower case.
+
+END_FORMAT
+		 );
+
+my $rpt_stretch_mins = [5,11];
+addArrayOption(GETOPTKEY   => 'stretch-reporting-min=s',
+	       GETOPTVAL   => $rpt_stretch_mins,
+	       REQUIRED    => 0,
+	       DEFAULT     => $rpt_stretch_mins,
+	       HIDDEN      => 0,
+	       INTERPOLATE => 1,
+	       DETAIL_DESC => << "END_DETAIL"
+
+After nucleotide sequence construction (see -o) or the submission of a nucleotide alignment (see -e), metrics are reported to gauge the effectiveness of the alignment and codon usage to produce sequences that are likely to be involved in crossover events.  Each possible pair of sequences will report the number of alignment positions involved in a contiguous stretch of identity that is equal to or larger than the number(s) supplied to this option.  For example, if this minimum value is 5 and a pair of sequences each has an aligned segment of ATTGCTA (and no other stretches of identity that are 5 or longer), the number reported for 'Contig Ident >= 5' will be 7.  The cutoff must be an unsigned integer.
+
+END_DETAIL
+	 );
+
+my $rpt_usage_maxes = [0.1];
+addArrayOption(GETOPTKEY   => 'usage-reporting-max=s',
+	       GETOPTVAL   => $rpt_stretch_mins,
+	       REQUIRED    => 0,
+	       DEFAULT     => $rpt_stretch_mins,
+	       HIDDEN      => 0,
+	       INTERPOLATE => 1,
+	       DETAIL_DESC => << "END_DETAIL"
+
+After nucleotide sequence construction (see -o) or the submission of a nucleotide alignment (see -e), metrics are reported to gauge the effectiveness of the alignment and codon usage to produce sequences that are likely to be involved in crossover events.  Generally, codons more highly used are utilized, but lesser used codons can get used if another codon pair between aligned amino acids has more homology.  Each sequence will have reported the number of rare codons that were included for each pair of sequences.  You can set the max cutoff using this option.  Multiple space-delimited values can be supplied.  Any unsigned number is acceptable.
+
+END_DETAIL
+	 );
 
 addOutdirOption(GETOPTKEY   => 'dir|outdir=s',
 		REQUIRED    => 0,
@@ -481,11 +523,52 @@ if(!$prealigned)
   }
 
 #If -i is not provided, -s is required
-if(getNumFileGroups($seq_file_type) == 0 && !defined($matrix_suffix))
+if(getNumFileGroups($seq_file_type) == 0 && !defined($matrix_suffix) &&
+   getNumFileGroups($eval_file_type) == 0)
   {
-    error("A matrix output file extension (-s) is required if a sequence ",
-	  "file (-i) is not provided.");
+    error("If a sequence file (-i) is not provided, then either a matrix ",
+	  "output file extension (-s) or an aligned nucleotide file for ",
+	  "evaluation (-e) is required.");
     quit(6);
+  }
+
+if((getNumFileGroups($seq_file_type) || getNumFileGroups($eval_file_type)) &&
+   scalar(@$rpt_stretch_mins) == 0 || scalar(grep {/\D/} @$rpt_stretch_mins))
+  {
+    error("Invalid value(s) for --stretch-reporting-min: [",
+	  join(' ',@$rpt_stretch_mins),"].",
+	  {DETAIL => ('There must be at least 1 value and all values must ' .
+		      'be unsigned integers.')});
+    quit(7);
+  }
+
+if((getNumFileGroups($seq_file_type) || getNumFileGroups($eval_file_type)) &&
+   scalar(@$rpt_usage_maxes) == 0 || scalar(grep {/[^\d\.]/}
+					    @$rpt_usage_maxes))
+  {
+    error("Invalid value(s) for --usage-reporting-max: [",
+	  join(' ',@$rpt_stretch_mins),"].",
+	  {DETAIL => ('There must be at least 1 value and all values must ' .
+		      'be unsigned.')});
+    quit(8);
+  }
+
+#There can only be 1 codon usage file if an evaluation DNA alignment file has
+#been provided
+if(getNumFileGroups($eval_file_type) &&
+   getNumFileGroups($codon_file_type) != 1)
+  {
+    error("If a file is provided to -e in order to generate metrics for an ",
+	  "alignment, exactly 1 codon usage file (-c) is required.  [",
+	  getNumFileGroups($codon_file_type),"] codon usage files were ",
+	  "provided.  Please provide only 1 codon usage file.",
+	  {DETAIL => ('Only 1 codon usage file can be used to generate ' .
+		      'metrics for a nucleotide alignment, and if more than ' .
+		      '1 is supplied, the selection of which one to use for ' .
+		      'the calculation of usage frequencies (such as the ' .
+		      'number of rare codons used - see --usage-reporting-' .
+		      'max) is ambiguous.')});
+    quit(9);
   }
 
 #In processing:
@@ -506,6 +589,9 @@ my $usage_buffer   = {};
 my $usage_obj      = {};
 my $aa_aln_buffer  = {};
 my $flex_scores    = {};
+my $nt_pair_sets   = [];
+my($eval_file);
+my $source_files   = []; #For metrics reporting
 
 #nextFileSet iterates sets of command-line-supplied files processed together
 while(nextFileCombo())
@@ -516,6 +602,8 @@ while(nextFileCombo())
     my $matrixOutFile  = getOutfile($mat_out_type);
     my $alnOutFile     = getOutfile($aa_out_type);
     my $ntOutFile      = getOutfile($seq_out_type);
+    if(!defined($eval_file))
+      {$eval_file = getInfile($eval_file_type)}
 
     my $tmpmatfile     = (defined($matrixFile) ?
 			  $matrixFile :
@@ -583,9 +671,373 @@ while(nextFileCombo())
 	my $alnSeqs = [getNextSeqRec(*AAALN,0,$tmpalnoutfile)];
 	closeIn(*AAALN);
 
-	writeNTPairs(constructNTPairs($alnSeqs,$matrix_obj,$usage_obj),
-		     $ntOutFile);
+	push(@$nt_pair_sets,constructNTPairs($alnSeqs,$matrix_obj,$usage_obj));
+	push(@$source_files,$aaFile);
+
+	writeNTPairs($nt_pair_sets->[-1],$ntOutFile);
       }
+  }
+
+if(defined($eval_file))
+  {
+    openIn(*NTALN,$eval_file) || next;
+    my $alnSeqs = [getNextSeqRec(*NTALN,0,$eval_file)];
+    closeIn(*NTALN);
+    push(@$nt_pair_sets,getAllNTPairs($alnSeqs,$eval_file));
+    push(@$source_files,$eval_file);
+  }
+
+if(scalar(@$nt_pair_sets))
+  {
+    my $pairnum = 0;
+    my $widests = [];
+    my @metrics = ();
+
+    push(@metrics,['Source File','Pair Number','Aln Length','Sequences','%ID',
+		   '%Aligned NTs',
+		   (map {'Contig Ident >= ' . $_} @$rpt_stretch_mins),
+		   (map {"Rare Codons(Usage<=$_)"} @$rpt_usage_maxes),
+		   'Rarest Included Codon','Frame Shift Bases']);
+
+    foreach(0..$#{$metrics[0]})
+      {if((scalar(@$widests) - 1) < $_ ||
+	  length($metrics[0]->[$_]) > $widests->[$_])
+	 {$widests->[$_] = length($metrics[0]->[$_])}}
+
+    foreach my $set_of_nt_pairs (@$nt_pair_sets)
+      {
+	my $source_file = shift(@$source_files); #Assumed same size
+	if(length($source_file) > $widests->[0])
+	  {$widests->[0] = length($source_file)}
+
+	#Generate metrics
+	foreach my $pair (@$set_of_nt_pairs)
+	  {
+	    #Source file (alignment or original set of AA sequences)
+	    push(@metrics,[$source_file]);
+
+	    #Pair number
+	    $pairnum++;
+	    push(@{$metrics[-1]},$pairnum);
+
+	    if(length($pairnum) > $widests->[1])
+	      {$widests->[1] = length($pairnum)}
+
+	    my $rec1 = $pair->[0];
+	    my $rec2 = $pair->[1];
+	    my $id1  = $rec1->[0];
+	    my $id2  = $rec2->[0];
+	    my $seq1 = $rec1->[1];
+	    my $seq2 = $rec2->[1];
+	    my $aln_len = length($seq1);
+	    if(length($seq2) != $aln_len)
+	      {error("Alignment length of sequence pair: [$id1,$id2] is not ",
+		     "consistent.  Metrics will be inaccurate.")}
+
+	    #Alignment length
+	    push(@{$metrics[-1]},$aln_len);
+
+	    if(length($aln_len) > $widests->[2])
+	      {$widests->[2] = length($aln_len)}
+
+	    #Sequence IDs
+	    if(length($id1) > 12)
+	      {$id1 =~ s/(.{9}).*/$1../}
+	    if(length($id2) > 12)
+	      {$id2 =~ s/(.{9}).*/$1../}
+	    push(@{$metrics[-1]},"$id1\n$id2");
+
+	    if(length($id1) > $widests->[3])
+	      {$widests->[3] = length($id1)}
+	    if(length($id2) > $widests->[3])
+	      {$widests->[3] = length($id2)}
+
+	    #Get metrics
+	    my($ident,$aligned,$stretch_bases,$rare_occurrences_per_seq,
+	       $rarest_codons_per_seq,$frame_shifts) =
+		 calculateMetrics($seq1,$seq2,$aln_len);
+
+	    #Percent identity
+	    $ident = roundInt($ident * 100) / 100;
+	    $ident =~ s/(\.\d{2}).*/$1/;
+	    push(@{$metrics[-1]},$ident);
+
+	    if(length($ident) > $widests->[4])
+	      {$widests->[4] = length($ident)}
+
+	    #Percent aligned NTs
+	    $aligned = roundInt($aligned * 100) / 100;
+	    $aligned =~ s/(\.\d{2}).*/$1/;
+	    push(@{$metrics[-1]},$aligned);
+
+	    if(length($aligned) > $widests->[5])
+	      {$widests->[5] = length($aligned)}
+
+	    #Number of bases involved in stretches of identity above cutoffs
+	    push(@{$metrics[-1]},@$stretch_bases);
+
+	    my $wi = 5; #"widests index"
+
+	    foreach(0..$#{$stretch_bases})
+	      {
+		$wi++;
+		if(length($stretch_bases->[$_]) > $widests->[$wi])
+		  {$widests->[$wi] = length($stretch_bases->[$_])}
+	      }
+
+	    #Number of rare codons per sequence below usage cutoffs
+	    push(@{$metrics[-1]},
+		 map {join("\n",@$_)} @$rare_occurrences_per_seq);
+
+	    foreach(0..$#{$rare_occurrences_per_seq})
+	      {
+		$wi++;
+		if(length($rare_occurrences_per_seq->[$_]->[0]) >
+		   $widests->[$wi])
+		  {$widests->[$wi] =
+		     length($rare_occurrences_per_seq->[$_]->[0])}
+		if(length($rare_occurrences_per_seq->[$_]->[1]) >
+		   $widests->[$wi])
+		  {$widests->[$wi] =
+		     length($rare_occurrences_per_seq->[$_]->[1])}
+	      }
+
+	    #Rarest Codon per sequence
+	    push(@{$metrics[-1]},join("\n",@$rarest_codons_per_seq));
+
+	    $wi++;
+
+	    if(length($rarest_codons_per_seq->[0]) > $widests->[$wi])
+	      {$widests->[$wi] = length($rarest_codons_per_seq->[0])}
+	    if(length($rarest_codons_per_seq->[1]) > $widests->[$wi])
+	      {$widests->[$wi] = length($rarest_codons_per_seq->[1])}
+
+	    #Number of bases involved in a frame shift
+	    push(@{$metrics[-1]},$frame_shifts);
+
+	    $wi++;
+
+	    if(length($frame_shifts) > $widests->[$wi])
+	      {$widests->[$wi] = length($frame_shifts)}
+	  }
+      }
+
+    print STDERR (join(':',@$widests),"\n");
+
+    #Print the metrics evaluating the alignments
+    print STDERR ("\nCrossover Metrics\n=================\n",
+		  array2DToString(\@metrics,$widests,'  '));
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+#Globals used: $rpt_stretch_mins, $rpt_usage_maxes, $usage_obj (assumed to only
+#be 1)
+sub calculateMetrics
+  {
+    my $seq1 = $_[0];
+    my $seq2 = $_[1];
+    my $len  = $_[2];
+
+    #Return values
+    my $ident                    = 0;  #This is a sum until the end
+    my $aligned                  = 0;  #This is a sum until the end
+    my $stretch_bases            = [map {0} @$rpt_stretch_mins];
+    my $rare_occurrences_per_seq = [map {[0,0]} @$rpt_usage_maxes];
+    my $rarest_codons_per_seq    = ['',''];
+    my $frame_shifts             = 0;
+
+    if(length($seq1) != length($seq2))
+      {
+	error("Aligned sequences are not the same length.  Unable to produce ",
+	      "alignment metrics.");
+	return(undef,undef,undef,undef,undef,undef);
+      }
+
+    my $framepos1   = 0;
+    my $framepos2   = 0;
+    my $codon1      = '';
+    my $codon2      = '';
+    my $stretch_len = 0;
+    my $usage       = undef;
+    my $rarest_usg1 = undef;
+    my $rarest_usg2 = undef;
+    for(my $i = 0;$i < length($seq1);$i++)
+      {
+	my $aa1 = uc(substr($seq1,$i,1));
+	my $aa2 = uc(substr($seq2,$i,1));
+
+	if($aa1 ne '-')
+	  {
+	    $framepos1++;
+	    $codon1 .= $aa1;
+	  }
+	if($aa2 ne '-')
+	  {
+	    $framepos2++;
+	    $codon2 .= $aa2;
+	  }
+
+	if($aa1 ne '-' && $aa2 ne '-')
+	  {
+	    if($framepos1 != $framepos2)
+	      {$frame_shifts++}
+
+	    if($aa1 eq $aa2)
+	      {
+		$ident++;
+		$stretch_len++;
+	      }
+	    else
+	      {
+		for(my $mini = 0;$mini < scalar(@$rpt_stretch_mins);$mini++)
+		  {
+		    my $min = $rpt_stretch_mins->[$mini];
+		    if($stretch_len >= $min)
+		      {$stretch_bases->[$mini] += $stretch_len}
+		  }
+
+		$stretch_len = 0;
+	      }
+	    $aligned++;
+	  }
+	else
+	  {
+	    for(my $mini = 0;$mini < scalar(@$rpt_stretch_mins);$mini++)
+	      {
+		my $min = $rpt_stretch_mins->[$mini];
+		if($stretch_len >= $min)
+		  {$stretch_bases->[$mini] += $stretch_len}
+	      }
+
+	    $stretch_len = 0;
+	  }
+
+	if($framepos1 == 3)
+	  {
+	    $usage = getUsageScore2($codon1,$usage_obj);
+
+	    if(!defined($rarest_usg1) || $usage < $rarest_usg1)
+	      {
+		$rarest_usg1 = $usage;
+		$rarest_codons_per_seq->[0] = "$codon1:$usage";
+	      }
+
+	    for(my $maxi = 0;$maxi < scalar(@$rpt_usage_maxes);$maxi++)
+	      {
+		my $max = $rpt_usage_maxes->[$maxi];
+		if($usage <= $max)
+		  {$rare_occurrences_per_seq->[$maxi]->[0]++}
+	      }
+
+	    $codon1    = '';
+	    $framepos1 = 0;
+	  }
+	if($framepos2 == 3)
+	  {
+	    $usage = getUsageScore2($codon2,$usage_obj);
+
+	    if(!defined($rarest_usg2) || $usage < $rarest_usg2)
+	      {
+		$rarest_usg2 = $usage;
+		$rarest_codons_per_seq->[1] = "$codon2:$usage";
+	      }
+
+	    for(my $maxi = 0;$maxi < scalar(@$rpt_usage_maxes);$maxi++)
+	      {
+		my $max = $rpt_usage_maxes->[$maxi];
+		if($usage <= $max)
+		  {$rare_occurrences_per_seq->[$maxi]->[1]++}
+	      }
+
+	    $codon2    = '';
+	    $framepos2 = 0;
+	  }
+      }
+
+    if($aligned == 0)
+      {error("No non-gap characters were found to be aligned together.  ",
+	     "Unable to calculate percent identity.")}
+    else
+      {
+	$ident /= $aligned;
+	$ident *= 100;
+      }
+    if($len == 0)
+      {error("Alignment length submitted is 0.  Unable to calculate percent ",
+	     "aligned sequence characters.")}
+    else
+      {
+	$aligned /= $len;
+	$aligned *= 100;
+      }
+
+    return($ident,$aligned,$stretch_bases,$rare_occurrences_per_seq,
+	   $rarest_codons_per_seq,$frame_shifts);
+  }
+
+sub getAllNTPairs
+  {
+    my $alnSeqs = $_[0]; #array of 2 (or 3) element arrays with defline,
+                         #sequence, and quality
+    my $file    = $_[1];
+    my $pairs   = [];
+
+    if(scalar(@$alnSeqs) < 2)
+      {
+	error("Multiple aligned sequences are required to get all pairs of ",
+	      "sequences.");
+	return($pairs);
+      }
+
+    my $got = 0;
+
+    foreach my $i (0..($#{$alnSeqs} - 1))
+      {
+	my $rec1 = $alnSeqs->[$i];
+	if(!defined($rec1))
+	  {
+	    error("Undefined nucleotide sequence record encountered.");
+	    next;
+	  }
+	foreach my $j (($i+1)..$#{$alnSeqs})
+	  {
+	    my $rec2 = $alnSeqs->[$j];
+	    if(!defined($rec2))
+	      {
+		error("Undefined nucleotide sequence record encountered.");
+		next;
+	      }
+	    if(length($rec1->[1]) ne length($rec2->[1]))
+	      {
+		warning("Alignment sequences [$rec1->[0]] and [$rec2->[0]] ",
+			"are not equal lengths.  Skipping.",
+			{DETAIL => ('You can ignore this warning if ' .
+				    'multiple separate nucleotide sequence ' .
+				    'alignments were entered into a single ' .
+				    'file.')});
+		next;
+	      }
+	    $got++;
+	    my $pair = [$rec1,$rec2];
+	    push(@$pairs,$pair);
+	  }
+      }
+
+    if($got == 0)
+      {error("No equal length alignment sequences were found",
+	     (defined($file) ? " in file [$file]." : '.'))}
+
+    return($pairs);
   }
 
 #Creates a hash from a tab delimited file like this:
@@ -704,10 +1156,25 @@ sub getUsageScore
 	error("Usage object (3rd parameter) not defined.");
 	return(undef);
       }
+    elsif(!defined($aa))
+      {return(getUsageScore2($codon,$usgobj))}
     elsif(exists($usgobj->{$aa}) && exists($usgobj->{$aa}->{$codon}))
       {return($usgobj->{$aa}->{$codon}->{SCORE})}
     error("Score not found for amino acid [",(defined($aa) ? $aa : 'undef'),
 	  "] and codon [",(defined($codon) ? $codon : 'undef'),"].");
+    return(undef);
+  }
+
+sub getUsageScore2
+  {
+    my $codon  = uc($_[0]);
+    my $usgobj = $_[1];
+
+    #Assumes that there's only 1 instance of a codon in the entire object
+    foreach my $aa (keys(%$usgobj))
+      {if(exists($usgobj->{$aa}->{$codon}))
+	 {return($usgobj->{$aa}->{$codon}->{SCORE})}}
+
     return(undef);
   }
 
@@ -969,9 +1436,13 @@ sub array2DToString
 		my $subrow = [map {my $cell=[split(/\n/,$_)];
 				   if(scalar(@$cell) <= $i){''}
 				   else{$cell->[$i]}} @$row];
-		$string .= join($spacer,
-				map {$_ . (' ' x ($width - length($_)))}
-				@$subrow) . "\n";
+		$string .=
+		  join($spacer,
+		       map {$subrow->[$_] .
+			      (' ' x ((ref($width) eq 'ARRAY' ?
+				       $width->[$_] : $width) -
+				      length($subrow->[$_])))}
+		       (0..$#{$subrow})) . "\n";
 	      }
 	  }
       }
@@ -1259,6 +1730,13 @@ sub constructNTPairs
 
     my $pairs      = [];
 
+    if(scalar(@$alnSeqs) < 2)
+      {
+	error("Multiple aligned sequences are required to contruct all pairs ",
+	      "of sequences.");
+	return($pairs);
+      }
+
     foreach my $i (0..($#{$alnSeqs} - 1))
       {
 	my $rec1 = $alnSeqs->[$i];
@@ -1273,6 +1751,7 @@ sub constructNTPairs
     return($pairs);
   }
 
+#Creates pairs of NT sequence records from an array of aligned AA sequences
 #Globals used: $align_codons
 sub constructNTPair
   {
@@ -1305,20 +1784,20 @@ sub constructNTPair
 
 	if($aa1 eq '-' && $aa2 ne '-')
 	  {
-	    $codon1 = ($align_codons ? '---' : '');
+	    $codon1 = '---';
 	    $codon2 = getMostUsedCodon($aa2,$usg);
 	    $stretch_size = 0;
 	  }
 	elsif($aa1 ne '-' && $aa2 eq '-')
 	  {
 	    $codon1 = getMostUsedCodon($aa1,$usg);
-	    $codon2 = ($align_codons ? '---' : '');
+	    $codon2 = '---';
 	    $stretch_size = 0;
 	  }
 	elsif($aa1 eq '-' && $aa2 eq '-')
 	  {
-	    $codon1 = ($align_codons ? '---' : '');
-	    $codon2 = ($align_codons ? '---' : '');
+	    $codon1 = '---';
+	    $codon2 = '---';
 	  }
 	#When equal, it's a no-brainer - best usage score
 	elsif($aa1 eq $aa2)
@@ -1551,6 +2030,9 @@ sub writeNTPairs
 	    $defline =~ s/^[>\@\+]//;
 	    chomp($defline);
 	    chomp($sequence);
+
+	    unless($align_codons)
+	      {$sequence =~ s/-+//g}
 
 	    print(">$defline\n");
 	    print(formatSequence($sequence));
