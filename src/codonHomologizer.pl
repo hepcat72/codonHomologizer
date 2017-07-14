@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.0',
+setScriptInfo(VERSION => '1.1',
               CREATED => '6/27/2017',
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
@@ -96,7 +96,7 @@ END_FORMAT
 
 my $extension = '.fna';
 my $seq_out_type =
-  addOutfileSuffixOption(GETOPTKEY     => 'o|seq-extension|seq-suffix=s',
+  addOutfileSuffixOption(GETOPTKEY     => 'o|dna-suffix|dna-extension=s',
 			 FILETYPEID    => $seq_file_type,
 			 GETOPTVAL     => \$extension,
 			 REQUIRED      => 0,
@@ -120,11 +120,14 @@ addOption(GETOPTKEY   => 'a|align-codons!',
 	  DEFAULT     => $align_codons,
 	  HIDDEN      => 0,
 	  DETAIL_DESC => ('Align the codons in the output DNA sequence file ' .
-			  '(see -o).'));
+			  'to match the amino acid alignment (see -o).  ' .
+			  'This is the default behavior.  Use --no-align-' .
+			  'codons to generate sequences without gap ' .
+			  'characters.'));
 
 my($matrix_suffix);
 my $mat_out_type =
-  addOutfileSuffixOption(GETOPTKEY     => 's|matrix-extension|matrix-suffix=s',
+  addOutfileSuffixOption(GETOPTKEY     => 's|matrix-suffix|matrix-extension=s',
 			 FILETYPEID    => $codon_file_type,
 			 GETOPTVAL     => \$matrix_suffix,
 			 REQUIRED      => 0,
