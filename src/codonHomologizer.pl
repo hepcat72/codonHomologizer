@@ -10,15 +10,15 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.0',                  #Your script version
-              CREATED => '6/27/2017',             #Put today's date here
-              AUTHOR  => 'Robert William Leach', #Put your name
-              CONTACT => 'rleach@princeton.edu', #Put your email
-              COMPANY => 'Princeton University', #Put your company
-              LICENSE => 'Copyright 2017',       #Put your year or lic.
+setScriptInfo(VERSION => '1.0',
+              CREATED => '6/27/2017',
+              AUTHOR  => 'Robert William Leach',
+              CONTACT => 'rleach@princeton.edu',
+              COMPANY => 'Princeton University',
+              LICENSE => 'Copyright 2017',
               HELP    => << 'END_HELP'
 
-This script takes 2 or more protein sequences, aligns them to optimize codon homology (by generating an amino acid weight matrix used by multiple sequence alignment tools such as clustalw, muscle, and search tools such as blast), and then recodes them to be more homologous at the DNA level.  It can utilize a codon usage table to select codons that are more common in a particular organism.  In other words, put simply, this script, given a set of amino acid sequences and a codon usage table, constructs the underlying genetic sequences to optimize for crossover events.
+This script, given a set of amino acid sequences and a codon usage table, constructs the underlying genetic sequences to optimize them for crossover events.  It takes 2 or more protein sequences, aligns them to optimize codon homology (using a custom amino acid weight matrix as input to a multiple sequence alignment tool (muscle)), and then recodes the amino acid sequences to be more homologous at the DNA level.  It utilizes the supplied codon usage table to prefer codons that are more common in a particular organism.
 
 END_HELP
 );
