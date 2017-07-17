@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.2',
+setScriptInfo(VERSION => '1.3',
               CREATED => '6/27/2017',
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
@@ -319,7 +319,6 @@ X  0 -1 -1 -1 -2 -1 -1 -1 -1 -1 -1 -1 -1 -1 -2  0  0 -2 -1 -1 -1 -1 -1 -4
 
 END_FORMAT
 		 );
-
 
 my $eval_file_type =
   addInfileOption(GETOPTKEY   => 'e|evaluate-nt-aln-file|nt-file=s',
@@ -1206,9 +1205,11 @@ sub getMostUsedCodon
 			$usgobj->{$aa}->{$a}->{SCORE}}
 		keys(%{$usgobj->{$aa}}))[0]);
       }
-    error("Score not found for amino acid [",(defined($aa) ? $aa : 'undef'),
-	  "].");
-    return('');
+
+    error("Score/codon not found for amino acid [",
+	  (defined($aa) ? $aa : 'undef'),"].");
+
+    return('NNN');
   }
 
 #Returns a list of codons in order of descending score (then ascending alpha)
@@ -1894,7 +1895,7 @@ sub getBestExtendPair
       {
 	error("The amino acid pair: [$aa1/$aa2] does not exist in the ",
 	      "protein weight matrix.");
-	return(wantarray ? (undef,undef) : [undef,undef]);
+	return(wantarray ? ('NNN','NNN') : ['NNN','NNN']);
       }
 
     my $flex_code = '';
@@ -1910,6 +1911,19 @@ sub getBestExtendPair
     else
       {return(wantarray ? getBestStartPair($mat,$aa1,$aa2,1) :
 	      scalar(getBestStartPair($mat,$aa1,$aa2,1)))}
+
+    if(!exists($mat->{$lesser}->{$greater}->{PAIRS}) ||
+       !exists($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ||
+       ref($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ne 'ARRAY' ||
+       scalar(keys(%{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}})) ==
+       0 ||
+       scalar(@{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}}) == 0)
+      {
+	error("The amino acid pair: [$aa1/$aa2] does not have any codon ",
+	      "pairs protein weight matrix.");
+
+	return(wantarray ? ('NNN','NNN') : ['NNN','NNN']);
+      }
 
     $best_codon_pair =
       (map {$swap ? [$_->[1],$_->[0]] : [$_->[0],$_->[1]]}
@@ -1967,7 +1981,7 @@ sub getBestStartPair
       {
 	error("The amino acid pair: [$aa1/$aa2] does not exist in the ",
 	      "protein weight matrix.");
-	return(wantarray ? (undef,undef) : [undef,undef]);
+	return(wantarray ? ('NNN','NNN') : ['NNN','NNN']);
       }
 
     my $flex_code = '';
@@ -1982,6 +1996,16 @@ sub getBestStartPair
       {$flex_code = 'R'}
     else
       {
+	if(!exists($mat->{$lesser}->{$greater}->{BESTPAIR}) ||
+	   !defined($mat->{$lesser}->{$greater}->{BESTPAIR}) ||
+	   ref($mat->{$lesser}->{$greater}->{BESTPAIR}) ne 'ARRAY' ||
+	   scalar(@{$mat->{$lesser}->{$greater}->{BESTPAIR}}) < 2)
+	  {
+	    error("The amino acid pair: [$aa1/$aa2] does not have codons in ",
+		  "the protein weight matrix.");
+	    return(wantarray ? ('NNN','NNN') : ['NNN','NNN']);
+	  }
+
 	$best_codon_pair = $mat->{$lesser}->{$greater}->{BESTPAIR};
 	if($swap)
 	  {$best_codon_pair =
@@ -1992,6 +2016,19 @@ sub getBestStartPair
 	      join(',',@$best_codon_pair),"].");
 
 	return(wantarray ? @$best_codon_pair : $best_codon_pair);
+      }
+
+    if(!exists($mat->{$lesser}->{$greater}->{PAIRS}) ||
+       !exists($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ||
+       ref($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ne 'ARRAY' ||
+       scalar(keys(%{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}})) ==
+       0 ||
+       scalar(@{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}}) == 0)
+      {
+	error("The amino acid pair: [$aa1/$aa2] does not have any codon ",
+	      "pairs protein weight matrix.");
+
+	return(wantarray ? ('NNN','NNN') : ['NNN','NNN']);
       }
 
     $best_codon_pair =
