@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.3',
+setScriptInfo(VERSION => '1.4',
               CREATED => '6/27/2017',
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
@@ -362,6 +362,49 @@ After nucleotide sequence construction (see -o) or the submission of a nucleotid
 END_DETAIL
 	 );
 
+my $segment_file_type =
+  addInfileOption(GETOPTKEY   => 'd|segment-file|domain-file=s',
+		  REQUIRED    => 0,
+		  PRIMARY     => 0,
+		  DEFAULT     => undef,
+		  DETAIL_DESC => << 'END_DETAIL'
+
+To align segments of each sequence (e.g. structural or secondary domains) independently and stitch the global alignment back together, you can provide a segment file.
+
+END_DETAIL
+		  ,
+		  PAIR_WITH   => $seq_file_type,
+		  PAIR_RELAT  => '1:1',
+		  FORMAT_DESC => << 'END_FORMAT'
+
+A segment file is a tab-delimited file consisting of a series of amino acid coordinates (starting from the first amino acid as coordinate 1) in each protein.  Each row of the file is for a different sequence in the input sequence file (see -i).  The first column is the sequence ID (which must match all the IDs in the sequence file from the first non-white-space character after the defline character to the next white-space character (or the end of the line)).  E.g. a defline of ">id1 my protein" would match a value in the first column of the segment file of "id1".  See the usage for option -d for details on how the coordinates are treated.
+
+A segment file contains coordinate pairs for each protein that are aligned with one-another independently.  There must be the same number of coordinates on each row.  An even or odd number of coordinates are acceptable, but they are treated in pairs, meaning each odd and even columned coordinate is treated as an inclusive pair such that the AAs corresponding to the pair are aligned with that segment [inclusive].  In the event that there are an odd number of coordinate columns, the coordinate in the last column is paired with the last coordinate in the protein.
+
+Gaps between pairs are also aligned in an exclusive coordinate fashion, but if one protein contains a gap and another has no gap between pairs, e.g. 1-10 and 5-15 (where no characters in the first sequence are aligned with the first 4 characters of the second sequence), gap characters are artificially inserted.  If the first coordinate (1) or last coordinate of a protein are not included, the first and last segments are aligned such that the end coordinate is inclusive and the inner coordinate is exclusive.
+
+Example:
+
+Mj	24	119	160	256	352	482	487	711
+Pf	1	100	152	269	360	544	552	769
+Sp	1	148	220	342	405	488	500	796
+Hs	38	176	230	371	419	514	516	817
+
+Coordinates aligned:
+Mj	1-23	24-119	120-159	160-256	257-351	352-482	483-486	487-711	712-end
+Pf	*	1-100	101-151	152-269	270-359	360-544	545-551	552-769	770-end
+Sp	*	1-148	149-219	220-342	343-404	405-488	489-499	500-796	797-end
+Hs	1-37	38-176	177-229	230-371	372-418	419-514	515-515	516-817	818-end
+
+* Sequence excluded from segment alignment and filled in with gap characters.
+
+If a coordinate is larger than the protein provided, an error or warning will be printed.  If the second coordinate in the last pair is larger than the protein, it will be automatically adjusted to the last possible protein coordinate with a warning.  Any other coordinate out of range will generate a fatal error.
+
+Coordinates on each row must be in sequential ascending order.
+
+END_FORMAT
+		 );
+
 addOutdirOption(GETOPTKEY   => 'dir|outdir=s',
 		REQUIRED    => 0,
 		DEFAULT     => undef,
@@ -570,6 +613,22 @@ if(getNumFileGroups($eval_file_type) &&
     quit(9);
   }
 
+#Segment files are incompatible in pre-computed alignment mode.
+if($prealigned && getNumFileGroups($segment_file_type))
+  {
+    error("Segment files (-d) are inpompatible with pre-computed alignemnts ",
+	  "(-r).");
+    quit(10);
+  }
+
+#Segment files require protien files
+if(getNumFileGroups($segment_file_type) &&
+   getNumFileGroups($seq_file_type) == 0)
+  {
+    error("Segment files (-d) require sequence files (-i).");
+    quit(11);
+  }
+
 #In processing:
 #Construct matrix file if extension provided
 #Write to AA alignment file if they provided an extension
@@ -577,20 +636,21 @@ if(getNumFileGroups($eval_file_type) &&
 #Print identity and score the identical stretches
 #Select codons to extend stretches
 
-my $default_tmpdir = './';
-my $tmpdir         = getTmpDir();
-my $tmp_suffix     = '.tmp';
+my $default_tmpdir  = './';
+my $tmpdir          = getTmpDir();
+my $tmp_suffix      = '.tmp';
 
-my $file_seen_hash = {};
-my $matrix_buffer  = {};
-my $matrix_obj     = {};
-my $usage_buffer   = {};
-my $usage_obj      = {};
-my $aa_aln_buffer  = {};
-my $flex_scores    = {};
-my $nt_pair_sets   = [];
+my $file_seen_hash  = {};
+my $matrix_buffer   = {};
+my $matrix_obj      = {};
+my $usage_buffer    = {};
+my $usage_obj       = {};
+my $aa_aln_buffer   = {};
+my $flex_scores     = {};
+my $nt_pair_sets    = [];
 my($eval_file);
-my $source_files   = []; #For metrics reporting
+my $source_files    = []; #For metrics reporting
+my($segments_obj);
 
 #nextFileSet iterates sets of command-line-supplied files processed together
 while(nextFileCombo())
@@ -598,19 +658,18 @@ while(nextFileCombo())
     my $codonUsageFile = getInfile($codon_file_type);
     my $matrixFile     = getInfile($matrix_file_type);
     my $aaFile         = getInfile($seq_file_type);
+    if(!defined($eval_file))
+      {$eval_file = getInfile($eval_file_type)}
+    my $segmentFile    = getInfile($segment_file_type);
     my $matrixOutFile  = getOutfile($mat_out_type);
     my $alnOutFile     = getOutfile($aa_out_type);
     my $ntOutFile      = getOutfile($seq_out_type);
-    if(!defined($eval_file))
-      {$eval_file = getInfile($eval_file_type)}
 
     my $tmpmatfile     = (defined($matrixFile) ?
 			  $matrixFile :
 			  (defined($matrixOutFile) ?
 			   $matrixOutFile : getTempFile($codonUsageFile) .
 			   '.mat'));
-    my $tmpaafile      = (defined($aaFile) ?
-			  $aaFile : getTempFile($codonUsageFile) . '.faa');
     my $tmpalnoutfile  = (defined($alnOutFile) ?
 			  $alnOutFile :
 			  ($prealigned ?
@@ -621,6 +680,24 @@ while(nextFileCombo())
       {$usage_buffer->{$codonUsageFile} = readUsageFile($codonUsageFile)}
     $usage_obj = $usage_buffer->{$codonUsageFile};
     next unless(defined($usage_obj));
+
+    #If a protein file was supplied, we're going to align it, and a segment
+    #file was supplied
+    my $aaSeqs = [];
+    if(defined($aaFile) && !$prealigned && defined($segmentFile))
+      {
+	openIn(*AA,$aaFile) || next;
+	$aaSeqs = [getNextSeqRec(*AA,0,$aaFile)];
+	closeIn(*AA);
+
+	#Read in the segment file - returns a hash keyed on sequence ID and
+	#whose values are lists of coordinate pairs.  Each pair in each
+	#sequence will be aligned with the respective pair from each other
+	#sequence.
+	$segments_obj = readSegmentFile($segmentFile,$aaSeqs,$aaFile);
+      }
+    else
+      {undef($segments_obj)}
 
     #Create/set a matrix object - we need one if any aa sequences were provided
     #or if we will be writing a matrix file
@@ -658,9 +735,12 @@ while(nextFileCombo())
     #Align the amino acid file if it is not already pre-aligned
     if(!$prealigned && defined($aaFile))
       {
-	verbose("Aligning sequences in [$tmpaafile] using matrix ",
-		"[$tmpmatfile].");
-	aaAlign($tmpaafile,$tmpmatfile,$tmpalnoutfile);
+	verbose("Aligning sequences in [$aaFile] using matrix [$tmpmatfile].");
+
+	if(defined($segments_obj))
+	  {aaSegmentAlign($aaSeqs,$tmpmatfile,$tmpalnoutfile,$segments_obj)}
+	else
+	  {aaAlign($aaFile,$tmpmatfile,$tmpalnoutfile)}
       }
 
     #Construct the NT sequences
@@ -820,8 +900,6 @@ if(scalar(@$nt_pair_sets))
 	      {$widests->[$wi] = length($frame_shifts)}
 	  }
       }
-
-    print STDERR (join(':',@$widests),"\n");
 
     #Print the metrics evaluating the alignments
     print STDERR ("\nCrossover Metrics\n=================\n",
@@ -1915,8 +1993,6 @@ sub getBestExtendPair
     if(!exists($mat->{$lesser}->{$greater}->{PAIRS}) ||
        !exists($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ||
        ref($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ne 'ARRAY' ||
-       scalar(keys(%{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}})) ==
-       0 ||
        scalar(@{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}}) == 0)
       {
 	error("The amino acid pair: [$aa1/$aa2] does not have any codon ",
@@ -2021,8 +2097,6 @@ sub getBestStartPair
     if(!exists($mat->{$lesser}->{$greater}->{PAIRS}) ||
        !exists($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ||
        ref($mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}) ne 'ARRAY' ||
-       scalar(keys(%{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}})) ==
-       0 ||
        scalar(@{$mat->{$lesser}->{$greater}->{PAIRS}->{$flex_code}}) == 0)
       {
 	error("The amino acid pair: [$aa1/$aa2] does not have any codon ",
@@ -2110,6 +2184,143 @@ sub aaAlign
 ###FINISH
   }
 
+sub aaSegmentAlign
+  {
+    my $aaseqs       = $_[0];
+    my $matfile      = $_[1];
+    my $alnoutfile   = $_[2];
+    my $segments_obj = $_[3];
+
+    my $segfilebase   = getTempFile('segment');
+    my $segment_files = [];
+    my $first         = 1;
+
+    #For each segment in the sequences, create a sequence file to feed to the
+    #alignment executable
+    my $alnseqs = {};
+    my $cnt     = 0;
+    my $counts  = {};
+    my $seen   = {};
+    foreach my $rec (@$aaseqs)
+      {
+	my $def = $rec->[0];
+	my $id  = parseIDFromDef($def);
+	my $seq = $rec->[1];
+	$alnseqs->{$id} = {DEF   => $def,
+			   SEQ   => '',
+			   ORDER => $cnt++};
+
+	if(!exists($segments_obj->{$id}))
+	  {
+	    error("Sequence ID [$id] not found in the segments object.",
+		  {DETAIL => ("Please check your segments file (-d) and " .
+			      "make sure the IDs in the first column match " .
+			      "the IDs in your amino acid sequence files " .
+			      "(-i).")});
+	    next;
+	  }
+
+	my $segnum = 0;
+	foreach my $coordpair (@{$segments_obj->{$id}})
+	  {
+	    $segnum++;
+	    my $segfile = $segfilebase . '.' . $segnum . '.fna';
+
+	    #This assumes the same number of coordinate pairs for each sequence
+	    #which is a safe assumption, because that's all checked when the
+	    #segments file is checked when it's read in
+	    if($first)
+	      {push(@$segment_files,$segfile);}
+
+	    #The segment doesn't exist for a sequence if it is undefined, which
+	    #means the user's coordinates abutt one another in at least one
+	    #sequence and not in another
+	    if(defined($coordpair))
+	      {
+		openOut(HANDLE => *SEGOUT,
+			FILE   => $segfile,
+			SELECT => 1,
+			QUIET  => isDebug(),
+			HEADER => 0,
+			APPEND => exists($seen->{$segfile}));
+
+		$seen->{$segfile}++;
+
+		#This counts the number of sequences written to each segment
+		#file
+		$counts->{$segfile}++;
+
+		print(">$id\n",
+		      substr($seq,
+			     $coordpair->[0] - 1,
+			     $coordpair->[1] - $coordpair->[0] + 1),"\n");
+
+		closeOut(*SEGOUT);
+	      }
+	  }
+
+	$first = 0;
+      }
+
+    #Now we can align each of the segment files.  This assumes any completely
+    #empty segments have been removed (i.e. when all the user's pairs of
+    #coordinates abutt one another).  The removal is done by the last loop in
+    #insertGapCoords()
+    foreach my $segfile (@$segment_files)
+      {
+	my $segoutfile = $segfile;
+
+	#If there is more than 1 sequence in the current segment fasta file
+	if($counts->{$segfile} > 1)
+	  {
+	    $segoutfile .= '.aln';
+
+	    #Perform the alignment
+	    aaAlign($segfile,$matfile,$segoutfile);
+	  }
+	#Else there's only 1 sequence - so we'll be reading in the segment
+	#file's 1 sequence and fill the rest of the sequences with gaps
+	#(inefficient, I know, but easier to code)
+
+	#Read in and append the sequences
+	openIn(*AAALNSEG,$segoutfile) || next;
+
+	#Turn the records into a hash for easy lookup, and grab the length of
+	#the alignment while doing it (assuming the length of each aligned
+	#sequence is consistent
+	my $len = 0;
+	my $segrecs = {map {$len = length($_->[1]) unless($len > 0);
+			    parseIDFromDef($_->[0]) => $_}
+		       getNextSeqRec(*AAALNSEG,0,$segoutfile)};
+
+	#Close the file
+	closeIn(*AAALNSEG);
+
+	#Append each sequence (or gap characters)
+	foreach my $id (keys(%$alnseqs))
+	  {
+	    if(exists($segrecs->{$id}))
+	      {
+		chomp($segrecs->{$id}->[1]);
+		$alnseqs->{$id}->{SEQ} .= $segrecs->{$id}->[1];
+	      }
+	    else
+	      {$alnseqs->{$id}->{SEQ} .= '-' x $len}
+	  }
+      }
+
+    #Finally, write out the aligned and stitched together segments to one
+    #output alignment file
+    openOut(*ALNOUT,$alnoutfile) || return(0);
+    foreach my $id (sort {$alnseqs->{$a}->{ORDER} <=>
+			    $alnseqs->{$b}->{ORDER}} keys(%$alnseqs))
+      {print("$alnseqs->{$id}->{DEF}\n$alnseqs->{$id}->{SEQ}\n")}
+    closeOut(*ALNOUT);
+
+    return(1);
+  }
+
+
 #Returns alignment in clustalw format of 2 very similar sequences using muscle
 #Uses global: $muscle, $verbose
 sub getMuscleMultipleAlignment
@@ -2126,6 +2337,8 @@ sub getMuscleMultipleAlignment
 	  ($align_opts ? ' ' . $align_opts : '');
 
     verbose("Running muscle.");
+
+    debug($muscle_command);
 
     my $output = `$muscle_command`;
 
@@ -2921,4 +3134,270 @@ sub getTmpDir
       {return('/tmp')}
     else
       {return($default_tmpdir)}
+  }
+
+#Returns a hash, keyed on sequence ID, whose values are lists of coordinate
+#pairs.  Each coordinate pair will be aligned with the respective pair of every
+#other sequence.  Gaps are filled in.  The pair will be undefined if it does
+#not contain a gap that another sequence has (i.e. SeqA: 1-10,11-20 SeqB: 1-12,
+#20-29.  In this scenario, SeqA doesn't have a gap, but SeqB does).
+sub readSegmentFile
+  {
+    my $file   = $_[0];
+    my $aaseqs = $_[1];
+    my $aafile = $_[2];
+
+    my $seqid_lookup = getSeqLookup($aaseqs);
+
+    my $segobj = {};
+
+    if(!defined($file))
+      {return($segobj)}
+
+    unless(openIn(*SEGS,$file))
+      {
+	error("Error reading segments file (-d): [$file].");
+	return(undef);
+      }
+
+    my $raw_coords   = [];
+    my $raw_rows     = [];
+    my $num_cols     = 0;
+    my $line_num     = 0;
+    my $errors       = 0;
+    my $ucheck       = {};
+    while(getLine(*SEGS))
+      {
+	$line_num++;
+	next if(/^\s*$/ || /^\s*#/);
+	chomp($_);
+	debug("Reading segment line: [$_].");
+	$raw_coords = [split(/ *\t */,$_)];
+	if($num_cols == 0)
+	  {
+	    $num_cols = scalar(@$raw_coords);
+	    if(scalar(@$raw_coords) < 2)
+	      {
+		error("No coordinates could be parsed from line [$line_num] ",
+		      "of segment file: [$file].");
+		$errors++;
+	      }
+	  }
+	if(scalar(@$raw_coords) != $num_cols)
+	  {
+	    error("Columns inconsistent in segment file: [$file].  Previous ",
+		  "rows had [$num_cols] columns, but the row on line ",
+		  "[$line_num] as [",scalar(@$raw_coords),"] columns.");
+	    $errors++;
+	  }
+	if(!exists($seqid_lookup->{$raw_coords->[0]}))
+	  {
+	    error("Sequence ID: [$raw_coords->[0]] on line [$line_num] of ",
+		  "segment file [$file] was not found as an ID on a defline ",
+		  "in the corresponding sequence file: [$aafile].");
+	    $errors++;
+	  }
+	if(scalar(grep {$raw_coords->[$_] =~ /\D/} (1..$#{$raw_coords})))
+	  {
+	    error("Non-integer charcters found among coordinate columns on ",
+		  "line [$line_num] of segment file [$file].");
+	    $errors++;
+	  }
+	if(scalar(grep {$raw_coords->[$_] !~ /\d/} (1..$#{$raw_coords})))
+	  {
+	    error("Integer charcters found to be absent among at least 1 ",
+		  "coordinate column on line [$line_num] of segment file ",
+		  "[$file].");
+	    $errors++;
+	  }
+	if(exists($ucheck->{$raw_coords->[0]}))
+	  {
+	    error("Duplicate sequence ID found on line [$line_num] of ",
+		  "segment file [$file].");
+	    $errors++;
+	  }
+	my $c = 0;
+	#If first in a pair is less than or equal to a previous column or the
+	#second of a pair is less than a previous column, it's an error
+	if(scalar(grep {my $res =
+			  ($_ % 2 ? $raw_coords->[$_] <= $c :
+			   $raw_coords->[$_] < $c);
+			$c = $raw_coords->[$_];$res} (1..$#{$raw_coords})))
+	  {
+	    error("Each pair of coordinate columns must have coordinates in ",
+		  "ascending order.  Coordinates on line [$line_num] in file ",
+		  "[$file] are not properly ordered.",
+		  {DETAIL => ("The first coordinate of each pair must be " .
+			      "greater than the coordinate in the previous " .
+			      "column.  The second of each pair must be " .
+			      "greater than or equal to the coordinate in " .
+			      "the previous column.")});
+	    $errors++;
+	  }
+	#If anything other than the last column has a coordinate that is out of
+	#range
+	if(exists($seqid_lookup->{$raw_coords->[0]}) &&
+	   scalar(grep {$raw_coords->[$_] >
+			  length($seqid_lookup->{$raw_coords->[0]}->[1])}
+		  (1..($#{$raw_coords} - 1))))
+	  {
+	    error("Coordinates out of range on line [$line_num] of segment ",
+		  "file [$file].",
+		  {DETAIL => ("The size of the amino acid " .
+			      "[$raw_coords->[0]] is [",
+			      length($seqid_lookup->{$raw_coords->[0]}->[1]),
+			      "].  Only the coordinate in the last column " .
+			      "is allowed to be outside the coordinate " .
+			      "range (because it's automatically " .
+			      "adjusted).")});
+	    $errors++;
+	  }
+
+	$ucheck->{$raw_coords->[0]}++;
+
+	push(@$raw_rows,$raw_coords);
+      }
+
+    closeIn(*SEGS);
+
+    if($errors)
+      {return(undef)}
+
+    debug("Raw rows from segment file [$file]:\n",
+	  join("\n",map {join(',',@$_)} @$raw_rows));
+
+    $segobj = insertGapCoords($raw_rows,$seqid_lookup);
+
+    if(scalar(keys(%$segobj)) != scalar(keys(%$seqid_lookup)))
+      {
+	error("The number of sequences: [",scalar(keys(%$seqid_lookup)),
+	      "] in the protein file: [$aafile] does not match the number of ",
+	      "sequence segment rows/IDs [",scalar(keys(%$segobj)),
+	      "] in the segment file: [$file].");
+	return(undef);
+      }
+
+    return($segobj);
+  }
+
+#Takes a 2D array and returns a hash (keyed on sequence ID) whose values are
+#lists of pairs of coordinates.
+sub insertGapCoords
+  {
+    my $array = $_[0];
+    my $hash  = $_[1];
+    my $obj = {};
+
+    my $real_indexes = [];
+
+    foreach my $row (@$array)
+      {
+	my $id   = $row->[0];
+	my $size = length($hash->{$id}->[1]);
+	my $c    = 0;
+	for(my $i = 1;$i < scalar(@$row);$i += 2)
+	  {
+	    #Insert a pair of gap coords
+	    if($row->[$i] == ($c + 1))
+	      {
+		push(@{$obj->{$id}},undef);
+		if(scalar(@$real_indexes) < scalar(@{$obj->{$id}}))
+		  {$real_indexes->[$#{$obj->{$id}}] = 0}
+	      }
+	    else
+	      {
+		push(@{$obj->{$id}},[($c + 1),($row->[$i] - 1)]);
+		$real_indexes->[$#{$obj->{$id}}] = 1;
+	      }
+
+	    #Push the current pair on
+	    my $end = 0;
+	    if(scalar(@$row) > ($i + 1))
+	      {$end = $row->[$i + 1]}
+	    else
+	      {$end = $size}
+	    if($end > $size)
+	      {$end = $size}
+	    push(@{$obj->{$id}},[$row->[$i],$end]);
+	    $real_indexes->[$#{$obj->{$id}}] = 1;
+	    $c = $end;
+	  }
+
+	#Append a gap at the end
+	if($obj->{$id}->[-1]->[1] == $size)
+	  {
+	    push(@{$obj->{$id}},undef);
+	    if(scalar(@$real_indexes) < scalar(@{$obj->{$id}}))
+	      {$real_indexes->[$#{$obj->{$id}}] = 0}
+	  }
+	else
+	  {
+	    push(@{$obj->{$id}},[($c + 1),$size]);
+		$real_indexes->[$#{$obj->{$id}}] = 1;
+	  }
+      }
+
+    debug("Segment coordinate pairs before missing gap filtering:\n[",
+	  join("\n",
+	       map {my $tid = $_;$tid . ':(' .
+		      join('),(',
+			   map {defined($_) ?
+				  join(',',@$_) : 'undef'}
+			   @{$obj->{$tid}}) . ')'} keys(%$obj)),'].');
+
+    #Eliminate non-existent gaps.  If all rows from the segment file had no
+    #gaps between pairs of columns, grep out those indexes
+    foreach my $id (keys(%$obj))
+      {$obj->{$id} = [map {$obj->{$id}->[$_]}
+		      grep {$real_indexes->[$_]} (0..$#{$obj->{$id}})]}
+
+    debug("Segment coordinate pairs after missing gap filtering:\n[",
+	  join("\n",
+	       map {my $tid = $_;$tid . ':(' .
+		      join('),(',
+			   map {defined($_) ?
+				  join(',',@$_) : 'undef'}
+			   @{$obj->{$tid}}) . ')'} keys(%$obj)),'].');
+
+    return($obj);
+  }
+
+sub getSeqLookup
+  {
+    my $recs = $_[0];
+    my $hash = {};
+
+    if(scalar(@$recs) == 0)
+      {return({})}
+
+    foreach my $rec (@$recs)
+      {
+	my $id = parseIDFromDef($rec->[0]);
+	if(exists($hash->{$id}))
+	  {
+	    error("Sequence IDs are not unique.  ID: [$id] found multiple ",
+		  "times.  Skipping duplicates.");
+	    next;
+	  }
+	elsif($id !~ /\S/)
+	  {
+	    error("Sequence IDs must have non-white-space characters.  ID: ",
+		  "[$id] invalid.  Skipping.");
+	    next;
+	  }
+	$hash->{$id} = $rec;
+      }
+
+    return($hash);
+  }
+
+sub parseIDFromDef
+  {
+    my $def = $_[0];
+
+    $def =~ s/^[>\@\+]\s*//;
+    $def =~ s/^[>\@\+]\s*//;
+    $def =~ s/ .*//;
+
+    return($def);
   }
