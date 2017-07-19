@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.4',
+setScriptInfo(VERSION => '1.5',
               CREATED => '6/27/2017',
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
@@ -19,6 +19,28 @@ setScriptInfo(VERSION => '1.4',
               HELP    => << 'END_HELP'
 
 This script, given a set of amino acid sequences and a codon usage table, constructs the underlying genetic sequences to optimize them for crossover events.  It takes 2 or more protein sequences, aligns them to optimize codon homology (using a custom amino acid weight matrix as input to a multiple sequence alignment tool (muscle)), and then recodes the amino acid sequences to be more homologous at the DNA level.  It utilizes the supplied codon usage table to prefer codons that are more common in a particular organism.
+
+Note that the alignment step is a multiple sequence alignment, but the sequence construction step is pair-wise.  Each sequence is produced multiple times, optimized for crossover for every other sequence.
+
+To omit codons from incorporation in the resulting sequence, omit them from the codon usage file (or comment them out - refer to the format for the -c file below).
+
+This script produces "Crossover Metrics" intended to be used to evaluate how good each pair of sequences is in terms of their potential to be involved in crossover events.  Here is a listing of the columns in the Crossover Metrics table:
+
+Source             - The file the metrics are based on.
+Pair               - Sequential/arbitrary unique pair ID.
+Aln Len            - The length of the alignment produced.
+Seqs               - Sequence IDs of the pair of seqs optimized for crossover.
+%ID                - Percent identity (identicals / all non-gap aln positions).
+%Aligned NTs       - All non-gap alignment positions / alignment length.
+Contig Ident >= N  - Number of NTs in identical stretches at least N in length.
+Rare Cdns(Usg<=N)  - Number of codons incorporated whose usage is <= N.
+Rarest Codon       - Codon:usage.  Rarest codon incorporated and its usage.
+Frame Shift bases  - Number of NTs aligned out of frame.
+Seg Aln Score[0-1] - Segment alignment score, a value between 0 and 1.
+
+The Seg Aln Score is only present is the -d option is used to align for example, similar protein structural domains with one another.
+
+To evaluate a sequence (nt alignment) produced by another tool, you can use the -e option.  All this does is add entries to the Crossover Metrics table at the end of the run.
 
 END_HELP
 );
@@ -369,7 +391,7 @@ my $segment_file_type =
 		  DEFAULT     => undef,
 		  DETAIL_DESC => << 'END_DETAIL'
 
-To align segments of each sequence (e.g. structural or secondary domains) independently and stitch the global alignment back together, you can provide a segment file.
+To align segments of each sequence (e.g. structural or secondary domains) independently and stitch the global alignment back together, you can provide a segment file containing pairs of coordinates that should be aligned sequentially within each sequence.
 
 END_DETAIL
 		  ,
@@ -629,6 +651,26 @@ if(getNumFileGroups($segment_file_type) &&
     quit(11);
   }
 
+#There can only be 1 segment file if an evaluation DNA alignment file has been
+#provided.  The same sequences and domains are assumed for each
+if(getNumFileGroups($eval_file_type) &&
+   getNumFileGroups($segment_file_type) != 1)
+  {
+    error("If a file is provided to -e in order to generate metrics for an ",
+	  "alignment, only 1 segment file (-d) can be supplied.  [",
+	  getNumFileGroups($segment_file_type),"] segment files were ",
+	  "provided.  Please provide only 1 segment file.",
+	  {DETAIL => ('The evaluation option (-e) is intended to allow the ' .
+		      'comparison of the performance of this tool with ' .
+		      'another tool (or this tool with different ' .
+		      'parameters) on the same set of sequences.  Thus, in ' .
+		      'order to make a valid comparison, and compare apples ' .
+		      'to apples, the same segments must be evaluated in ' .
+		      'the evaluation alignment as in the alignment ' .
+		      'produced on this run.')});
+    quit(12);
+  }
+
 #In processing:
 #Construct matrix file if extension provided
 #Write to AA alignment file if they provided an extension
@@ -636,20 +678,21 @@ if(getNumFileGroups($segment_file_type) &&
 #Print identity and score the identical stretches
 #Select codons to extend stretches
 
-my $default_tmpdir  = './';
-my $tmpdir          = getTmpDir();
-my $tmp_suffix      = '.tmp';
+my $default_tmpdir   = './';
+my $tmpdir           = getTmpDir();
+my $tmp_suffix       = '.tmp';
 
-my $file_seen_hash  = {};
-my $matrix_buffer   = {};
-my $matrix_obj      = {};
-my $usage_buffer    = {};
-my $usage_obj       = {};
-my $aa_aln_buffer   = {};
-my $flex_scores     = {};
-my $nt_pair_sets    = [];
+my $file_seen_hash   = {};
+my $matrix_buffer    = {};
+my $matrix_obj       = {};
+my $usage_buffer     = {};
+my $usage_obj        = {};
+my $aa_aln_buffer    = {};
+my $flex_scores      = {};
+my $nt_pair_sets     = [];
 my($eval_file);
-my $source_files    = []; #For metrics reporting
+my $source_files     = []; #For metrics reporting
+my $segments_objects = [];
 my($segments_obj);
 
 #nextFileSet iterates sets of command-line-supplied files processed together
@@ -752,6 +795,7 @@ while(nextFileCombo())
 
 	push(@$nt_pair_sets,constructNTPairs($alnSeqs,$matrix_obj,$usage_obj));
 	push(@$source_files,$aaFile);
+	push(@$segments_objects,$segments_obj);
 
 	writeNTPairs($nt_pair_sets->[-1],$ntOutFile);
       }
@@ -764,6 +808,7 @@ if(defined($eval_file))
     closeIn(*NTALN);
     push(@$nt_pair_sets,getAllNTPairs($alnSeqs,$eval_file));
     push(@$source_files,$eval_file);
+    push(@$segments_objects,$segments_obj);
   }
 
 if(scalar(@$nt_pair_sets))
@@ -772,11 +817,14 @@ if(scalar(@$nt_pair_sets))
     my $widests = [];
     my @metrics = ();
 
-    push(@metrics,['Source File','Pair Number','Aln Length','Sequences','%ID',
+    push(@metrics,['Source','Pair','Aln Len','Seqs','%ID',
 		   '%Aligned NTs',
 		   (map {'Contig Ident >= ' . $_} @$rpt_stretch_mins),
-		   (map {"Rare Codons(Usage<=$_)"} @$rpt_usage_maxes),
-		   'Rarest Included Codon','Frame Shift Bases']);
+		   (map {"Rare Cdns(Usg<=$_)"} @$rpt_usage_maxes),
+		   'Rarest Codon','Frame Shift Bases']);
+
+    if(defined($segments_obj))
+      {push(@{$metrics[0]},'Seg Aln Score[0-1]')}
 
     foreach(0..$#{$metrics[0]})
       {if((scalar(@$widests) - 1) < $_ ||
@@ -788,6 +836,8 @@ if(scalar(@$nt_pair_sets))
 	my $source_file = shift(@$source_files); #Assumed same size
 	if(length($source_file) > $widests->[0])
 	  {$widests->[0] = length($source_file)}
+
+	my $segobj = shift(@$segments_objects);
 
 	#Generate metrics
 	foreach my $pair (@$set_of_nt_pairs)
@@ -898,6 +948,22 @@ if(scalar(@$nt_pair_sets))
 
 	    if(length($frame_shifts) > $widests->[$wi])
 	      {$widests->[$wi] = length($frame_shifts)}
+
+	    #Segment alignment score
+	    if(defined($segobj))
+	      {
+		my $segscore =
+		  calculateSegmentAlignScore($id1,$id2,$seq1,$seq2,$segobj);
+		$segscore = roundInt($segscore * 1000) / 1000;
+
+		#Number of bases involved in a frame shift
+		push(@{$metrics[-1]},$segscore);
+
+		$wi++;
+
+		if(length($segscore) > $widests->[$wi])
+		  {$widests->[$wi] = length($segscore)}
+	      }
 	  }
       }
 
@@ -1060,6 +1126,100 @@ sub calculateMetrics
 
     return($ident,$aligned,$stretch_bases,$rare_occurrences_per_seq,
 	   $rarest_codons_per_seq,$frame_shifts);
+  }
+
+#This calculates a score based on the number of bases the sequence with the
+#smaller aligned segment has aligned to the corresponding segment of the other
+#sequence over the combined length of all the smaller segments in the pair.
+#E.g.: NNNNTTTTNNN
+#      NNNNNNTTTTT  This will score a 0.5 because 2 T's out of the smaller 4
+#align.  In this case, a 'T' is a segment that's supposed to align in each
+#sequence.
+sub calculateSegmentAlignScore
+  {
+    my $id1    = parseIDFromDef($_[0]);
+    my $id2    = parseIDFromDef($_[1]);
+    my $seq1   = $_[2];
+    my $seq2   = $_[3];
+    my $segobj = $_[4];
+
+    my($lesserid,$lesserseq,$greaterid,$greaterseq);
+    my $score_sum = 0;
+    my $score_total = 0;
+
+    my $lesser_pos = 1;
+    my $greater_pos = 1;
+    my $alnindex = 0;
+    foreach my $segindex (0..$#{$segobj->{SEGS}})
+      {
+	if($segobj->{SEGS}->[$segindex]->{$id1}->{SIZE} <
+	   $segobj->{SEGS}->[$segindex]->{$id2}->{SIZE})
+	  {
+	    $lesserid  = $id1;
+	    $lesserseq = $seq1;
+	    $greaterid = $id2;
+	    $greaterseq = $seq2;
+	  }
+	else
+	  {
+	    $lesserid  = $id2;
+	    $lesserseq = $seq2;
+	    $greaterid = $id1;
+	    $greaterseq = $seq1;
+	  }
+
+	$score_total += $segobj->{SEGS}->[$segindex]->{$lesserid}->{SIZE};
+
+	my $start = $alnindex;
+	foreach($start..(length($seq1) - 1))
+	  {
+	    $alnindex = $_;
+
+	    my $lesser_char  = substr($lesserseq,$alnindex,1);
+	    my $greater_char = substr($greaterseq,$alnindex,1);
+
+	    #If there's no gap in this position and we're in both
+	    #segments' positions for both sequences, increment the sum
+	    if($lesser_char ne '-' && $greater_char ne '-' &&
+	       $lesser_pos >=
+	       $segobj->{SEGS}->[$segindex]->{$lesserid}->{COORDS}->[0] &&
+	       $lesser_pos <=
+	       $segobj->{SEGS}->[$segindex]->{$lesserid}->{COORDS}->[1] &&
+	       $greater_pos >=
+	       $segobj->{SEGS}->[$segindex]->{$greaterid}->{COORDS}->[0] &&
+	       $greater_pos <=
+	       $segobj->{SEGS}->[$segindex]->{$greaterid}->{COORDS}->[1])
+	      {$score_sum++}
+
+	    if($lesser_char ne '-')
+	      {$lesser_pos++}
+	    if($greater_char ne '-')
+	      {$greater_pos++}
+
+	    #If we are past the current segment for either sequence, they will
+	    #not possibly align, so move on to the next segment
+	    if($lesser_pos >
+	       $segobj->{SEGS}->[$segindex]->{$lesserid}->{COORDS}->[1] ||
+	       $greater_pos >
+	       $segobj->{SEGS}->[$segindex]->{$greaterid}->{COORDS}->[1])
+	      {
+		#We don't want to redo this alignment index.  We already just
+		#looked at it and we also already incremented the real
+		#positions in each of the sequences
+		$alnindex++;
+		last;
+	      }
+	  }
+      }
+
+    if($score_total == 0)
+      {
+	error("Unexpected error.  The combined size of all the lesser sized ",
+	      "segments between sequences [$id1] and [$id2] is 0.");
+	return(0);
+      }
+
+    return($score_sum / $score_total);
   }
 
 sub getAllNTPairs
@@ -2210,9 +2370,11 @@ sub aaSegmentAlign
 			   SEQ   => '',
 			   ORDER => $cnt++};
 
-	if(!exists($segments_obj->{$id}))
+	if(!exists($segments_obj->{ALL}) ||
+	   !exists($segments_obj->{ALL}->{$id}))
 	  {
-	    error("Sequence ID [$id] not found in the segments object.",
+	    error("Sequence ID [$id] not found (or mal-formed) in the ",
+		  "segments object.",
 		  {DETAIL => ("Please check your segments file (-d) and " .
 			      "make sure the IDs in the first column match " .
 			      "the IDs in your amino acid sequence files " .
@@ -2221,7 +2383,7 @@ sub aaSegmentAlign
 	  }
 
 	my $segnum = 0;
-	foreach my $coordpair (@{$segments_obj->{$id}})
+	foreach my $coordpair (@{$segments_obj->{ALL}->{$id}})
 	  {
 	    $segnum++;
 	    my $segfile = $segfilebase . '.' . $segnum . '.fna';
@@ -2529,7 +2691,7 @@ sub getNextSeqRec
 	  {
 	    $num_fastq_defs =
 	      `head -n 50 "$input_file" | grep -c -E '^[\@\+]'`;
-	    debug("System output from: [",
+	    debug({LEVEL => 2},"System output from: [",
 		  qq(head -n 50 "$input_file" | grep -c -E '^[\@\+]'),
 		  "]:\n$num_fastq_defs");
 	    $num_fastq_defs =~ s/^\D+//;
@@ -2550,7 +2712,7 @@ sub getNextSeqRec
 	      {
 		$num_fasta_defs = `head -n 50 "$input_file" | grep -c -E '^>'`;
 
-		debug("System output from: [",
+		debug({LEVEL => 2},"System output from: [",
 		      qq(head -n 50 "$input_file" | grep -c -E '^>'),
 		      "]:\n$num_fasta_defs");
 
@@ -3136,11 +3298,20 @@ sub getTmpDir
       {return($default_tmpdir)}
   }
 
-#Returns a hash, keyed on sequence ID, whose values are lists of coordinate
-#pairs.  Each coordinate pair will be aligned with the respective pair of every
-#other sequence.  Gaps are filled in.  The pair will be undefined if it does
-#not contain a gap that another sequence has (i.e. SeqA: 1-10,11-20 SeqB: 1-12,
-#20-29.  In this scenario, SeqA doesn't have a gap, but SeqB does).
+#Returns a segments object.  A segment's object has 3 main hash keys:
+#ALL, which is a hash keyed on sequence ID, whose values are lists of
+#coordinate pairs.  Each coordinate pair will be aligned with the respective
+#pair of every other sequence.  Gaps are filled in.  The pair will be undefined
+#if it does not contain a gap that another sequence has (i.e. SeqA: 1-10,11-20
+#SeqB: 1-12, 20-29.  In this scenario, SeqA doesn't have a gap, but SeqB does).
+#TARGET, which is a similar hash, but it only contains the coordinate pairs
+#that were read from the file.  It is currently unused, but is intended to be
+#used later to allow unequal alignments to consume neighboring gap sequence.
+#SEGS, which is an array of each segment containing a hash keyed on the
+#sequence ID and containing a hash with keys for segment SIZE and segment
+#COORDS of only target segments.  This is used by the segment alignment scoring
+#code to determine how good alignments of the desired aligned segments are,
+#i.e. did the segments actually align well together?
 sub readSegmentFile
   {
     my $file   = $_[0];
@@ -3268,11 +3439,11 @@ sub readSegmentFile
 
     $segobj = insertGapCoords($raw_rows,$seqid_lookup);
 
-    if(scalar(keys(%$segobj)) != scalar(keys(%$seqid_lookup)))
+    if(scalar(keys(%{$segobj->{ALL}})) != scalar(keys(%$seqid_lookup)))
       {
 	error("The number of sequences: [",scalar(keys(%$seqid_lookup)),
 	      "] in the protein file: [$aafile] does not match the number of ",
-	      "sequence segment rows/IDs [",scalar(keys(%$segobj)),
+	      "sequence segment rows/IDs [",scalar(keys(%{$segobj->{ALL}})),
 	      "] in the segment file: [$file].");
 	return(undef);
       }
@@ -3280,8 +3451,7 @@ sub readSegmentFile
     return($segobj);
   }
 
-#Takes a 2D array and returns a hash (keyed on sequence ID) whose values are
-#lists of pairs of coordinates.
+#Takes a 2D array and returns a segments object.
 sub insertGapCoords
   {
     my $array = $_[0];
@@ -3300,17 +3470,24 @@ sub insertGapCoords
 	    #Insert a pair of gap coords
 	    if($row->[$i] == ($c + 1))
 	      {
-		push(@{$obj->{$id}},undef);
-		if(scalar(@$real_indexes) < scalar(@{$obj->{$id}}))
-		  {$real_indexes->[$#{$obj->{$id}}] = 0}
+		push(@{$obj->{ALL}->{$id}},undef);
+		#There's a real index value for each pair of coordinates which
+		#tracks whether the entire column is all undef values or not
+		#(because all the pairs of coordinates in 1 column may abutt
+		#all the pairs of coordinates in another column.  Any column
+		#without a "real" value will be filtered out at the bottom of
+		#this sub.  The 0 below is set whenever the segments object has
+		#grown larger than the real_indexes array.
+		if(scalar(@$real_indexes) < scalar(@{$obj->{ALL}->{$id}}))
+		  {$real_indexes->[$#{$obj->{ALL}->{$id}}] = 0}
 	      }
 	    else
 	      {
-		push(@{$obj->{$id}},[($c + 1),($row->[$i] - 1)]);
-		$real_indexes->[$#{$obj->{$id}}] = 1;
+		push(@{$obj->{ALL}->{$id}}, [($c + 1),($row->[$i] - 1)]);
+		$real_indexes->[$#{$obj->{ALL}->{$id}}] = 1;
 	      }
 
-	    #Push the current pair on
+	    #Determine the next/end coordinate in the pair
 	    my $end = 0;
 	    if(scalar(@$row) > ($i + 1))
 	      {$end = $row->[$i + 1]}
@@ -3318,22 +3495,44 @@ sub insertGapCoords
 	      {$end = $size}
 	    if($end > $size)
 	      {$end = $size}
-	    push(@{$obj->{$id}},[$row->[$i],$end]);
-	    $real_indexes->[$#{$obj->{$id}}] = 1;
+
+	    #The target pairs of coordinates are the ones the user has
+	    #specified in their file that they want to have aligned together
+	    push(@{$obj->{TARGET}->{$id}},[$row->[$i],$end]);
+
+	    #Keep track of which sequence has the smaller segment for each
+	    #column of segments.  This will be used in the segment alignment
+	    #score calculation.  We will need to know which sequence has the
+	    #smallest segment for any pair of seqences and each column of
+	    #segments and what coordinates it corresponds to.  And so that any
+	    #DNA alignment can be scored by domain alignment, we will convert
+	    #the coordinates to nucleotide coordinates.  These values are
+	    #indexed essentially be the "segment index" (i.e. The current size
+	    #of the current TARGET array of coordinate pars is the current
+	    #segment number we're on).
+	    my $nt_size = ($end - $row->[$i] + 1) * 3;
+	    $obj->{SEGS}->[$#{$obj->{TARGET}->{$id}}]->{$id}->{SIZE} =
+	      $nt_size;
+	    $obj->{SEGS}->[$#{$obj->{TARGET}->{$id}}]->{$id}->{COORDS} =
+	      [($row->[$i] - 1) * 3 + 1,$end * 3];
+
+	    #Push the current pair on
+	    push(@{$obj->{ALL}->{$id}},[$row->[$i],$end]);
+	    $real_indexes->[$#{$obj->{ALL}->{$id}}] = 1;
 	    $c = $end;
 	  }
 
 	#Append a gap at the end
-	if($obj->{$id}->[-1]->[1] == $size)
+	if($obj->{ALL}->{$id}->[-1]->[1] == $size)
 	  {
-	    push(@{$obj->{$id}},undef);
-	    if(scalar(@$real_indexes) < scalar(@{$obj->{$id}}))
-	      {$real_indexes->[$#{$obj->{$id}}] = 0}
+	    push(@{$obj->{ALL}->{$id}},undef);
+	    if(scalar(@$real_indexes) < scalar(@{$obj->{ALL}->{$id}}))
+	      {$real_indexes->[$#{$obj->{ALL}->{$id}}] = 0}
 	  }
 	else
 	  {
-	    push(@{$obj->{$id}},[($c + 1),$size]);
-		$real_indexes->[$#{$obj->{$id}}] = 1;
+	    push(@{$obj->{ALL}->{$id}},[($c + 1),$size]);
+		$real_indexes->[$#{$obj->{ALL}->{$id}}] = 1;
 	  }
       }
 
@@ -3343,13 +3542,15 @@ sub insertGapCoords
 		      join('),(',
 			   map {defined($_) ?
 				  join(',',@$_) : 'undef'}
-			   @{$obj->{$tid}}) . ')'} keys(%$obj)),'].');
+			   @{$obj->{ALL}->{$tid}}) . ')'}
+	       keys(%{$obj->{ALL}})),'].');
 
     #Eliminate non-existent gaps.  If all rows from the segment file had no
     #gaps between pairs of columns, grep out those indexes
-    foreach my $id (keys(%$obj))
-      {$obj->{$id} = [map {$obj->{$id}->[$_]}
-		      grep {$real_indexes->[$_]} (0..$#{$obj->{$id}})]}
+    foreach my $id (keys(%{$obj->{ALL}}))
+      {$obj->{ALL}->{$id} = [map {$obj->{ALL}->{$id}->[$_]}
+			     grep {$real_indexes->[$_]}
+			     (0..$#{$obj->{ALL}->{$id}})]}
 
     debug("Segment coordinate pairs after missing gap filtering:\n[",
 	  join("\n",
@@ -3357,7 +3558,8 @@ sub insertGapCoords
 		      join('),(',
 			   map {defined($_) ?
 				  join(',',@$_) : 'undef'}
-			   @{$obj->{$tid}}) . ')'} keys(%$obj)),'].');
+			   @{$obj->{ALL}->{$tid}}) . ')'}
+	       keys(%{$obj->{ALL}})),'].');
 
     return($obj);
   }
