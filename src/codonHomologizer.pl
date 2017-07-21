@@ -654,7 +654,7 @@ if(getNumFileGroups($segment_file_type) &&
 #There can only be 1 segment file if an evaluation DNA alignment file has been
 #provided.  The same sequences and domains are assumed for each
 if(getNumFileGroups($eval_file_type) &&
-   getNumFileGroups($segment_file_type) != 1)
+   getNumFileGroups($segment_file_type) > 1)
   {
     error("If a file is provided to -e in order to generate metrics for an ",
 	  "alignment, only 1 segment file (-d) can be supplied.  [",
