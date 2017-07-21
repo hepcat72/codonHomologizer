@@ -10,8 +10,8 @@ use strict;
 ## Describe the script
 ##
 
-setScriptInfo(VERSION => '1.5',
-              CREATED => '6/27/2017',
+setScriptInfo(CREATED => '6/27/2017',
+              VERSION => '1.6',
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
               COMPANY => 'Princeton University',
@@ -1677,10 +1677,10 @@ sub array2DToString
 				   else{$cell->[$i]}} @$row];
 		$string .=
 		  join($spacer,
-		       map {$subrow->[$_] .
-			      (' ' x ((ref($width) eq 'ARRAY' ?
-				       $width->[$_] : $width) -
-				      length($subrow->[$_])))}
+		       map {my $l = ((ref($width) eq 'ARRAY' ?
+				      $width->[$_] : $width) -
+				     length($subrow->[$_]));
+			    $subrow->[$_] . ($l < 1 ? '' : (' ' x $l))}
 		       (0..$#{$subrow})) . "\n";
 	      }
 	  }
@@ -1707,9 +1707,10 @@ sub pwMatrixToString
 	    my($lesser,$greater) = sort {$a cmp $b} ($aa1,$aa2);
 	    my $score = roundInt($matrix->{$lesser}->{$greater}->{SCORE});
 	    my $len = length($score);
-	    $string .= (' ' .                       #Column spacer
-			(' ' x ($colwid - $len)) .  #Right-align
-			$score);                    #Score
+	    my $l = $colwid - $len;
+	    $string .= (' ' .                         #Column spacer
+			($l < 1 ? '' : (' ' x $l)) .  #Right-align
+			$score);                      #Score
 	  }
 	$string .= "\n";
       }
@@ -1923,9 +1924,10 @@ END_HEAD
 	    my($lesser,$greater) = sort {$a cmp $b} ($aa1,$aa2);
 	    my $score = roundInt($matrix->{$lesser}->{$greater}->{SCORE});
 	    my $len = length($score);
-	    print MATO (' ',                        #Column spacer
-			(' ' x ($colwid - $len)),   #Right-align
-			$score);                    #Score
+	    my $l = $colwid - $len;
+	    print MATO (' ',                          #Column spacer
+			($l < 1 ? '' : (' ' x $l)),   #Right-align
+			$score);                      #Score
 	  }
 	print MATO "\n";
       }
