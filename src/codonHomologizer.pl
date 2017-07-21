@@ -10,8 +10,9 @@ use strict;
 ## Describe the script
 ##
 
+our $VERSION = '1.7';
 setScriptInfo(CREATED => '6/27/2017',
-              VERSION => '1.6',
+              VERSION => $VERSION,
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
               COMPANY => 'Princeton University',
