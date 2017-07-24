@@ -10,7 +10,8 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.7';
+our $VERSION = '1.8';
+
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
               AUTHOR  => 'Robert William Leach',
@@ -21,29 +22,33 @@ setScriptInfo(CREATED => '6/27/2017',
 
 This script, given a set of amino acid sequences and a codon usage table, constructs the underlying genetic sequences to optimize them for crossover events.  It takes 2 or more protein sequences, aligns them to optimize codon homology (using a custom amino acid weight matrix as input to a multiple sequence alignment tool (muscle)), and then recodes the amino acid sequences to be more homologous at the DNA level.  It utilizes the supplied codon usage table to prefer codons that are more common in a particular organism.
 
-Note that the alignment step is a multiple sequence alignment, but the sequence construction step is pair-wise.  Each sequence is produced multiple times, optimized for crossover for every other sequence.
+END_HELP
+	      ,
+	      DETAILED_HELP => << 'END_DETAIL'
+
+Note, the alignment step is a multiple sequence alignment, but the sequence construction step is pair-wise.  Each sequence is produced multiple times, optimized for crossover for every other sequence.
 
 To omit codons from incorporation in the resulting sequence, omit them from the codon usage file (or comment them out - refer to the format for the -c file below).
 
 This script produces "Crossover Metrics" intended to be used to evaluate how good each pair of sequences is in terms of their potential to be involved in crossover events.  Here is a listing of the columns in the Crossover Metrics table:
 
-Source             - The file the metrics are based on.
-Pair               - Sequential/arbitrary unique pair ID.
-Aln Len            - The length of the alignment produced.
-Seqs               - Sequence IDs of the pair of seqs optimized for crossover.
-%ID                - Percent identity (identicals / all non-gap aln positions).
-%Aligned NTs       - All non-gap alignment positions / alignment length.
-Contig Ident >= N  - Number of NTs in identical stretches at least N in length.
-Rare Cdns(Usg<=N)  - Number of codons incorporated whose usage is <= N.
-Rarest Codon       - Codon:usage.  Rarest codon incorporated and its usage.
-Frame Shift bases  - Number of NTs aligned out of frame.
-Seg Aln Score[0-1] - Segment alignment score, a value between 0 and 1.
+    Source             - The file the metrics are based on.
+    Pair               - Sequential/arbitrary unique pair ID.
+    Aln Len            - The length of the alignment produced.
+    Seqs               - Sequence IDs.
+    %ID                - % identity: identicals/non-gap-length.
+    %Aligned NTs       - Non-gap aln length / aln length.
+    Contig Ident >= N  - Sum of contiguous identical NTs >= N.
+    Rare Cdns(Usg<=N)  - Number of codons incorporated whose usage is <= N.
+    Rarest Codon       - Codon:usage.  Rarest codon incorporated.
+    Frame Shift bases  - Number of NTs aligned out of frame.
+    Seg Aln Score[0-1] - Segment alignment score, a value between 0 and 1 (inclusive).
 
 The Seg Aln Score is only present is the -d option is used to align for example, similar protein structural domains with one another.
 
 To evaluate a sequence (nt alignment) produced by another tool, you can use the -e option.  All this does is add entries to the Crossover Metrics table at the end of the run.
 
-END_HELP
+END_DETAIL
 );
 
 setDefaults(HEADER        => 0,
@@ -92,27 +97,32 @@ addOption(GETOPTKEY   => 'f|aa-seq-format=s',
 	  ACCEPTS     => $sequence_formats);
 
 my $codon_file_type =
-  addInfileOption(GETOPTKEY   => 'c|codon-usage-file=s',
+  addInfileOption(GETOPTKEY   => 'c|codon-file|codon-usage-file=s',
 		  REQUIRED    => 1,
 		  PRIMARY     => 0,
 		  DEFAULT     => undef,
 		  SMRY_DESC   => 'Codon usage file.',
-		  DETAIL_DESC => 'Tab-delimited file [AA,codon,score].',
+		  DETAIL_DESC => << 'END_DETAIL'
+
+Tab-delimited file containing the single letter amino acid (AA) code, codon, and [optional] usage score (see -n).  This script will only use the codons in this file to construct sequences and for the matrix used in the alignment step.  All AAs must be present.  If usage is unimportant, make the usage scores all the same (e.g. 1.0) or supply -n to ignore the usage column.  Commented out lines in the file will be ignored.  See --help for more details.
+
+END_DETAIL
+		  ,
 		  PAIR_WITH   => $seq_file_type,
 		  PAIR_RELAT  => '1:1orM',
 		  FORMAT_DESC => << 'END_FORMAT'
 
 A tab- or space- delimited file of codon usage scores.  The first column is the single-character amino acid code, the second column is the codon (3 nucleotides), and the third column us the codon's usage score.  The score can be any integer or fraction.  The scores will be normalized, so the score column does not need to sum to any value.  Additional columns are optional and ignored.  Not all codons are required to be present.  All amino acids and the stop character ('*') are required to be present.  To exclude a codon from incorporation into all recoded sequences, you can either remove that row from the file or comment it out by inserting a '#' at the beginning of the line.  Empty lines are permissable.  Example:
 
-G	GGG	0.11	Gly
-G	GGA	0.21	Gly
-G	GGT	0.49	Gly
-G	GGC	0.19	Gly
-E	GAG	0.29	Glu
-E	GAA	0.71	Glu
-D	GAT	0.65	Asp
-D	GAC	0.35	Asp
-...
+    G	GGG	0.11	Gly
+    G	GGA	0.21	Gly
+    G	GGT	0.49	Gly
+    G	GGC	0.19	Gly
+    E	GAG	0.29	Glu
+    E	GAA	0.71	Glu
+    D	GAT	0.65	Asp
+    D	GAC	0.35	Asp
+    ...
 
 END_FORMAT
 		 );
@@ -171,31 +181,31 @@ ftp://ftp.ncbi.nih.gov/blast/matrices/
 
 Example (BLOSUM62):
 
-   A  R  N  D  C  Q  E  G  H  I  L  K  M  F  P  S  T  W  Y  V  B  Z  X  *
-A  4 -1 -2 -2  0 -1 -1  0 -2 -1 -1 -1 -1 -2 -1  1  0 -3 -2  0 -2 -1  0 -4 
-R -1  5  0 -2 -3  1  0 -2  0 -3 -2  2 -1 -3 -2 -1 -1 -3 -2 -3 -1  0 -1 -4 
-N -2  0  6  1 -3  0  0  0  1 -3 -3  0 -2 -3 -2  1  0 -4 -2 -3  3  0 -1 -4 
-D -2 -2  1  6 -3  0  2 -1 -1 -3 -4 -1 -3 -3 -1  0 -1 -4 -3 -3  4  1 -1 -4 
-C  0 -3 -3 -3  9 -3 -4 -3 -3 -1 -1 -3 -1 -2 -3 -1 -1 -2 -2 -1 -3 -3 -2 -4 
-Q -1  1  0  0 -3  5  2 -2  0 -3 -2  1  0 -3 -1  0 -1 -2 -1 -2  0  3 -1 -4 
-E -1  0  0  2 -4  2  5 -2  0 -3 -3  1 -2 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
-G  0 -2  0 -1 -3 -2 -2  6 -2 -4 -4 -2 -3 -3 -2  0 -2 -2 -3 -3 -1 -2 -1 -4 
-H -2  0  1 -1 -3  0  0 -2  8 -3 -3 -1 -2 -1 -2 -1 -2 -2  2 -3  0  0 -1 -4 
-I -1 -3 -3 -3 -1 -3 -3 -4 -3  4  2 -3  1  0 -3 -2 -1 -3 -1  3 -3 -3 -1 -4 
-L -1 -2 -3 -4 -1 -2 -3 -4 -3  2  4 -2  2  0 -3 -2 -1 -2 -1  1 -4 -3 -1 -4 
-K -1  2  0 -1 -3  1  1 -2 -1 -3 -2  5 -1 -3 -1  0 -1 -3 -2 -2  0  1 -1 -4 
-M -1 -1 -2 -3 -1  0 -2 -3 -2  1  2 -1  5  0 -2 -1 -1 -1 -1  1 -3 -1 -1 -4 
-F -2 -3 -3 -3 -2 -3 -3 -3 -1  0  0 -3  0  6 -4 -2 -2  1  3 -1 -3 -3 -1 -4 
-P -1 -2 -2 -1 -3 -1 -1 -2 -2 -3 -3 -1 -2 -4  7 -1 -1 -4 -3 -2 -2 -1 -2 -4 
-S  1 -1  1  0 -1  0  0  0 -1 -2 -2  0 -1 -2 -1  4  1 -3 -2 -2  0  0  0 -4 
-T  0 -1  0 -1 -1 -1 -1 -2 -2 -1 -1 -1 -1 -2 -1  1  5 -2 -2  0 -1 -1  0 -4 
-W -3 -3 -4 -4 -2 -2 -3 -2 -2 -3 -2 -3 -1  1 -4 -3 -2 11  2 -3 -4 -3 -2 -4 
-Y -2 -2 -2 -3 -2 -1 -2 -3  2 -1 -1 -2 -1  3 -3 -2 -2  2  7 -1 -3 -2 -1 -4 
-V  0 -3 -3 -3 -1 -2 -2 -3 -3  3  1 -2  1 -1 -2 -2  0 -3 -1  4 -3 -2 -1 -4 
-B -2 -1  3  4 -3  0  1 -1  0 -3 -4  0 -3 -3 -2  0 -1 -4 -3 -3  4  1 -1 -4 
-Z -1  0  0  1 -3  3  4 -2  0 -3 -3  1 -1 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
-X  0 -1 -1 -1 -2 -1 -1 -1 -1 -1 -1 -1 -1 -1 -2  0  0 -2 -1 -1 -1 -1 -1 -4 
-* -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4  1 
+       A  R  N  D  C  Q  E  G  H  I  L  K  M  F  P  S  T  W  Y  V  B  Z  X  *
+    A  4 -1 -2 -2  0 -1 -1  0 -2 -1 -1 -1 -1 -2 -1  1  0 -3 -2  0 -2 -1  0 -4 
+    R -1  5  0 -2 -3  1  0 -2  0 -3 -2  2 -1 -3 -2 -1 -1 -3 -2 -3 -1  0 -1 -4 
+    N -2  0  6  1 -3  0  0  0  1 -3 -3  0 -2 -3 -2  1  0 -4 -2 -3  3  0 -1 -4 
+    D -2 -2  1  6 -3  0  2 -1 -1 -3 -4 -1 -3 -3 -1  0 -1 -4 -3 -3  4  1 -1 -4 
+    C  0 -3 -3 -3  9 -3 -4 -3 -3 -1 -1 -3 -1 -2 -3 -1 -1 -2 -2 -1 -3 -3 -2 -4 
+    Q -1  1  0  0 -3  5  2 -2  0 -3 -2  1  0 -3 -1  0 -1 -2 -1 -2  0  3 -1 -4 
+    E -1  0  0  2 -4  2  5 -2  0 -3 -3  1 -2 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
+    G  0 -2  0 -1 -3 -2 -2  6 -2 -4 -4 -2 -3 -3 -2  0 -2 -2 -3 -3 -1 -2 -1 -4 
+    H -2  0  1 -1 -3  0  0 -2  8 -3 -3 -1 -2 -1 -2 -1 -2 -2  2 -3  0  0 -1 -4 
+    I -1 -3 -3 -3 -1 -3 -3 -4 -3  4  2 -3  1  0 -3 -2 -1 -3 -1  3 -3 -3 -1 -4 
+    L -1 -2 -3 -4 -1 -2 -3 -4 -3  2  4 -2  2  0 -3 -2 -1 -2 -1  1 -4 -3 -1 -4 
+    K -1  2  0 -1 -3  1  1 -2 -1 -3 -2  5 -1 -3 -1  0 -1 -3 -2 -2  0  1 -1 -4 
+    M -1 -1 -2 -3 -1  0 -2 -3 -2  1  2 -1  5  0 -2 -1 -1 -1 -1  1 -3 -1 -1 -4 
+    F -2 -3 -3 -3 -2 -3 -3 -3 -1  0  0 -3  0  6 -4 -2 -2  1  3 -1 -3 -3 -1 -4 
+    P -1 -2 -2 -1 -3 -1 -1 -2 -2 -3 -3 -1 -2 -4  7 -1 -1 -4 -3 -2 -2 -1 -2 -4 
+    S  1 -1  1  0 -1  0  0  0 -1 -2 -2  0 -1 -2 -1  4  1 -3 -2 -2  0  0  0 -4 
+    T  0 -1  0 -1 -1 -1 -1 -2 -2 -1 -1 -1 -1 -2 -1  1  5 -2 -2  0 -1 -1  0 -4 
+    W -3 -3 -4 -4 -2 -2 -3 -2 -2 -3 -2 -3 -1  1 -4 -3 -2 11  2 -3 -4 -3 -2 -4 
+    Y -2 -2 -2 -3 -2 -1 -2 -3  2 -1 -1 -2 -1  3 -3 -2 -2  2  7 -1 -3 -2 -1 -4 
+    V  0 -3 -3 -3 -1 -2 -2 -3 -3  3  1 -2  1 -1 -2 -2  0 -3 -1  4 -3 -2 -1 -4 
+    B -2 -1  3  4 -3  0  1 -1  0 -3 -4  0 -3 -3 -2  0 -1 -4 -3 -3  4  1 -1 -4 
+    Z -1  0  0  1 -3  3  4 -2  0 -3 -3  1 -1 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
+    X  0 -1 -1 -1 -2 -1 -1 -1 -1 -1 -1 -1 -1 -1 -2  0  0 -2 -1 -1 -1 -1 -1 -4 
+    * -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4  1 
 
 END_FORMAT
 			 ,
@@ -314,31 +324,31 @@ ftp://ftp.ncbi.nih.gov/blast/matrices/
 
 Example (BLOSUM62):
 
-   A  R  N  D  C  Q  E  G  H  I  L  K  M  F  P  S  T  W  Y  V  B  Z  X  *
-A  4 -1 -2 -2  0 -1 -1  0 -2 -1 -1 -1 -1 -2 -1  1  0 -3 -2  0 -2 -1  0 -4 
-R -1  5  0 -2 -3  1  0 -2  0 -3 -2  2 -1 -3 -2 -1 -1 -3 -2 -3 -1  0 -1 -4 
-N -2  0  6  1 -3  0  0  0  1 -3 -3  0 -2 -3 -2  1  0 -4 -2 -3  3  0 -1 -4 
-D -2 -2  1  6 -3  0  2 -1 -1 -3 -4 -1 -3 -3 -1  0 -1 -4 -3 -3  4  1 -1 -4 
-C  0 -3 -3 -3  9 -3 -4 -3 -3 -1 -1 -3 -1 -2 -3 -1 -1 -2 -2 -1 -3 -3 -2 -4 
-Q -1  1  0  0 -3  5  2 -2  0 -3 -2  1  0 -3 -1  0 -1 -2 -1 -2  0  3 -1 -4 
-E -1  0  0  2 -4  2  5 -2  0 -3 -3  1 -2 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
-G  0 -2  0 -1 -3 -2 -2  6 -2 -4 -4 -2 -3 -3 -2  0 -2 -2 -3 -3 -1 -2 -1 -4 
-H -2  0  1 -1 -3  0  0 -2  8 -3 -3 -1 -2 -1 -2 -1 -2 -2  2 -3  0  0 -1 -4 
-I -1 -3 -3 -3 -1 -3 -3 -4 -3  4  2 -3  1  0 -3 -2 -1 -3 -1  3 -3 -3 -1 -4 
-L -1 -2 -3 -4 -1 -2 -3 -4 -3  2  4 -2  2  0 -3 -2 -1 -2 -1  1 -4 -3 -1 -4 
-K -1  2  0 -1 -3  1  1 -2 -1 -3 -2  5 -1 -3 -1  0 -1 -3 -2 -2  0  1 -1 -4 
-M -1 -1 -2 -3 -1  0 -2 -3 -2  1  2 -1  5  0 -2 -1 -1 -1 -1  1 -3 -1 -1 -4 
-F -2 -3 -3 -3 -2 -3 -3 -3 -1  0  0 -3  0  6 -4 -2 -2  1  3 -1 -3 -3 -1 -4 
-P -1 -2 -2 -1 -3 -1 -1 -2 -2 -3 -3 -1 -2 -4  7 -1 -1 -4 -3 -2 -2 -1 -2 -4 
-S  1 -1  1  0 -1  0  0  0 -1 -2 -2  0 -1 -2 -1  4  1 -3 -2 -2  0  0  0 -4 
-T  0 -1  0 -1 -1 -1 -1 -2 -2 -1 -1 -1 -1 -2 -1  1  5 -2 -2  0 -1 -1  0 -4 
-W -3 -3 -4 -4 -2 -2 -3 -2 -2 -3 -2 -3 -1  1 -4 -3 -2 11  2 -3 -4 -3 -2 -4 
-Y -2 -2 -2 -3 -2 -1 -2 -3  2 -1 -1 -2 -1  3 -3 -2 -2  2  7 -1 -3 -2 -1 -4 
-V  0 -3 -3 -3 -1 -2 -2 -3 -3  3  1 -2  1 -1 -2 -2  0 -3 -1  4 -3 -2 -1 -4 
-B -2 -1  3  4 -3  0  1 -1  0 -3 -4  0 -3 -3 -2  0 -1 -4 -3 -3  4  1 -1 -4 
-Z -1  0  0  1 -3  3  4 -2  0 -3 -3  1 -1 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
-X  0 -1 -1 -1 -2 -1 -1 -1 -1 -1 -1 -1 -1 -1 -2  0  0 -2 -1 -1 -1 -1 -1 -4 
-* -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4  1 
+       A  R  N  D  C  Q  E  G  H  I  L  K  M  F  P  S  T  W  Y  V  B  Z  X  *
+    A  4 -1 -2 -2  0 -1 -1  0 -2 -1 -1 -1 -1 -2 -1  1  0 -3 -2  0 -2 -1  0 -4 
+    R -1  5  0 -2 -3  1  0 -2  0 -3 -2  2 -1 -3 -2 -1 -1 -3 -2 -3 -1  0 -1 -4 
+    N -2  0  6  1 -3  0  0  0  1 -3 -3  0 -2 -3 -2  1  0 -4 -2 -3  3  0 -1 -4 
+    D -2 -2  1  6 -3  0  2 -1 -1 -3 -4 -1 -3 -3 -1  0 -1 -4 -3 -3  4  1 -1 -4 
+    C  0 -3 -3 -3  9 -3 -4 -3 -3 -1 -1 -3 -1 -2 -3 -1 -1 -2 -2 -1 -3 -3 -2 -4 
+    Q -1  1  0  0 -3  5  2 -2  0 -3 -2  1  0 -3 -1  0 -1 -2 -1 -2  0  3 -1 -4 
+    E -1  0  0  2 -4  2  5 -2  0 -3 -3  1 -2 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
+    G  0 -2  0 -1 -3 -2 -2  6 -2 -4 -4 -2 -3 -3 -2  0 -2 -2 -3 -3 -1 -2 -1 -4 
+    H -2  0  1 -1 -3  0  0 -2  8 -3 -3 -1 -2 -1 -2 -1 -2 -2  2 -3  0  0 -1 -4 
+    I -1 -3 -3 -3 -1 -3 -3 -4 -3  4  2 -3  1  0 -3 -2 -1 -3 -1  3 -3 -3 -1 -4 
+    L -1 -2 -3 -4 -1 -2 -3 -4 -3  2  4 -2  2  0 -3 -2 -1 -2 -1  1 -4 -3 -1 -4 
+    K -1  2  0 -1 -3  1  1 -2 -1 -3 -2  5 -1 -3 -1  0 -1 -3 -2 -2  0  1 -1 -4 
+    M -1 -1 -2 -3 -1  0 -2 -3 -2  1  2 -1  5  0 -2 -1 -1 -1 -1  1 -3 -1 -1 -4 
+    F -2 -3 -3 -3 -2 -3 -3 -3 -1  0  0 -3  0  6 -4 -2 -2  1  3 -1 -3 -3 -1 -4 
+    P -1 -2 -2 -1 -3 -1 -1 -2 -2 -3 -3 -1 -2 -4  7 -1 -1 -4 -3 -2 -2 -1 -2 -4 
+    S  1 -1  1  0 -1  0  0  0 -1 -2 -2  0 -1 -2 -1  4  1 -3 -2 -2  0  0  0 -4 
+    T  0 -1  0 -1 -1 -1 -1 -2 -2 -1 -1 -1 -1 -2 -1  1  5 -2 -2  0 -1 -1  0 -4 
+    W -3 -3 -4 -4 -2 -2 -3 -2 -2 -3 -2 -3 -1  1 -4 -3 -2 11  2 -3 -4 -3 -2 -4 
+    Y -2 -2 -2 -3 -2 -1 -2 -3  2 -1 -1 -2 -1  3 -3 -2 -2  2  7 -1 -3 -2 -1 -4 
+    V  0 -3 -3 -3 -1 -2 -2 -3 -3  3  1 -2  1 -1 -2 -2  0 -3 -1  4 -3 -2 -1 -4 
+    B -2 -1  3  4 -3  0  1 -1  0 -3 -4  0 -3 -3 -2  0 -1 -4 -3 -3  4  1 -1 -4 
+    Z -1  0  0  1 -3  3  4 -2  0 -3 -3  1 -1 -3 -1  0 -1 -3 -2 -2  1  4 -1 -4 
+    X  0 -1 -1 -1 -2 -1 -1 -1 -1 -1 -1 -1 -1 -1 -2  0  0 -2 -1 -1 -1 -1 -1 -4 
+    * -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4 -4  1 
 
 END_FORMAT
 		 );
@@ -408,16 +418,17 @@ Gaps between pairs are also aligned in an exclusive coordinate fashion, but if o
 
 Example:
 
-Mj	24	119	160	256	352	482	487	711
-Pf	1	100	152	269	360	544	552	769
-Sp	1	148	220	342	405	488	500	796
-Hs	38	176	230	371	419	514	516	817
+    Mj	24	119	160	256	352	482	487	711
+    Pf	1	100	152	269	360	544	552	769
+    Sp	1	148	220	342	405	488	500	796
+    Hs	38	176	230	371	419	514	516	817
 
 Coordinates aligned:
-Mj	1-23	24-119	120-159	160-256	257-351	352-482	483-486	487-711	712-end
-Pf	*	1-100	101-151	152-269	270-359	360-544	545-551	552-769	770-end
-Sp	*	1-148	149-219	220-342	343-404	405-488	489-499	500-796	797-end
-Hs	1-37	38-176	177-229	230-371	372-418	419-514	515-515	516-817	818-end
+
+    Mj	1-23	24-119	120-159	160-256	257-351	352-482	483-486	487-711	712-end
+    Pf	*	1-100	101-151	152-269	270-359	360-544	545-551	552-769	770-end
+    Sp	*	1-148	149-219	220-342	343-404	405-488	489-499	500-796	797-end
+    Hs	1-37	38-176	177-229	230-371	372-418	419-514	515-515	516-817	818-end
 
 * Sequence excluded from segment alignment and filled in with gap characters.
 
@@ -427,6 +438,19 @@ Coordinates on each row must be in sequential ascending order.
 
 END_FORMAT
 		 );
+
+my $no_usage = 0;
+addOption(GETOPTKEY   => 'n|ignore-codon-usage!',
+	  GETOPTVAL   => \$no_usage,
+	  REQUIRED    => 0,
+	  DEFAULT     => $no_usage,
+	  HIDDEN      => 0,
+	  DETAIL_DESC => << 'END_DETAIL'
+
+If codon usage is not important to you, you can ignore usage by supplying this option.  Any usage values in the codon usage file (see -c) will be ignored and the weight matrix used in the alignment step and the sequence construction will only be based on homology (and homology placement/flexibility).  Note, the hierarchy of factors is: homology, homology flexibility, and usage.  See --help --extended for more details.
+
+END_DETAIL
+	 );
 
 addOutdirOption(GETOPTKEY   => 'dir|outdir=s',
 		REQUIRED    => 0,
@@ -1284,6 +1308,7 @@ sub getAllNTPairs
 #where:
 #hash->{G}->{GGG} = {SCORE => 0.11,DATA => ['Gly']}
 #hash->{G}->{GGG} = {SCORE => 0.21,DATA => ['Gly']}
+#Globals used: $no_usage
 sub readUsageFile
   {
     my $file = $_[0];
@@ -1308,7 +1333,7 @@ sub readUsageFile
 
 	my @data = split(/ *\t */,$_);
 
-	if(scalar(@data) < 3)
+	if(scalar(@data) < (!defined($no_usage) || $no_usage == 0 ? 3 : 2))
 	  {
 	    error("Unable to parse line [$line] of codon usage file ",
 		  "[$file].  Skipping.",
@@ -1327,7 +1352,7 @@ sub readUsageFile
 			      "match what's in the sequence file.")});
 	    next;
 	  }
-	elsif($data[2] !~ /\d/)
+	elsif(!$no_usage && $data[2] !~ /\d/)
 	  {
 	    error("The codon usage score on line [$line]: [$data[2]] of ",
 		  "codon usage file [$file] must be a number.  Skipping.",
@@ -1358,7 +1383,8 @@ sub readUsageFile
 	$cdnchk->{$data[1]} = 1;
 	$got_one = 1;
 
-	$usg->{uc($data[0])}->{uc($data[1])} = {SCORE => $data[2],
+	$usg->{uc($data[0])}->{uc($data[1])} = {SCORE => ($no_usage ?
+							  1.0 : $data[2]),
 						DATA  => $rest};
       }
 
