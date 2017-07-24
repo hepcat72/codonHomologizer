@@ -20,6 +20,7 @@ our($VERSION,$compile_err);
 my($script_version_number,
    $created_on_date,
    $help_summary,
+   $advanced_help,
    $script_author,
    $script_contact,
    $script_company,
@@ -147,6 +148,7 @@ sub _init
     $script_version_number = undef;
     $created_on_date       = undef;
     $help_summary          = undef;
+    $advanced_help         = undef;
     $script_author         = undef;
     $script_contact        = undef;
     $script_company        = undef;
@@ -285,7 +287,8 @@ sub _init
 
 sub setScriptInfo
   {
-    my @params   = qw(VERSION HELP CREATED AUTHOR CONTACT COMPANY LICENSE);
+    my @params   = qw(VERSION HELP CREATED AUTHOR CONTACT COMPANY LICENSE
+		      DETAILED_HELP);
     my $check    = {map {$_ => 1} @params};
     my @in       = getSubParams([@params],[],[@_],1);
     my %infohash = map {$params[$_] => $in[$_]} 0..$#in;
@@ -322,6 +325,7 @@ sub setScriptInfo
     $script_contact        = $infohash{CONTACT};
     $script_company        = $infohash{COMAPNY};
     $script_license        = $infohash{LICENSE};
+    $advanced_help         = $infohash{DETAILED_HELP};
   }
 
 sub getRelationStr
@@ -10549,7 +10553,7 @@ sub help
     $created_on_date = 'UNKNOWN' if(!defined($created_on_date) ||
 				    $created_on_date eq 'DATE HERE');
 
-    my $custom_help = customHelp($ignore);
+    my $custom_help = customHelp($ignore,$advanced);
 
     if(getRunModeStatus() != 1 || $default_run_mode ne 'usage')
       {
@@ -10568,12 +10572,16 @@ $custom_help
 
 end_print
 
-    if($advanced)
+    if($advanced > 1 ||
+       ($advanced == 1 && (!defined($advanced_help) || $advanced_help eq '')))
       {
 	my $header = '                 ' .
 	  join("\n                 ",split(/\n/,getHeader()));
 
 	print << "end_print";
+ADVANCED
+========
+
 * HEADER FORMAT: Unless --noheader is supplied or STANDARD output is going to
                  the terminal (and not redirected into a file), every output
                  file, including output to standard out, will get a header that
@@ -10694,6 +10702,11 @@ associated in the order in which they were provided on the command line.
 
 end_print
       }
+    elsif($advanced)
+      {print("Supply `--help --extended 2` for details on advanced interface ",
+	     "options.\n\n")}
+    else
+      {print("Supply `--help --extended` for advanced help.\n\n")}
 
     return(0);
   }
@@ -10812,9 +10825,12 @@ sub customUsage
     return($short,$long);
   }
 
+#Globals used: $help_summary, $advanced_help, $extended
 sub customHelp
   {
-    my $ignore = defined($_[0]) ? $_[0] : 0;
+    my $ignore = defined($_[0]) ? $_[0] : 0;  #Ignore unset FORMAT descriptions
+    my $local_extended = (defined($_[1]) ? $_[1] :               #Advanced help
+			  (defined($extended) ? $extended : 0));
 
     my $out = '';
 
@@ -10827,6 +10843,10 @@ sub customHelp
 
     $out .= alignHelpCols($summary_flag,$summary) if(defined($help_summary) ||
 						     !$ignore);
+
+    #Now let's construct the custom advanced help string.
+    if($local_extended && defined($advanced_help) && $advanced_help ne '')
+      {$out .= alignHelpCols('* DETAILS:',$advanced_help)}
 
     my($flags_remainder,$short_desc_remainder,$long_desc_remainder);
     foreach my $usage_hash (grep {$_->{OPTTYPE} eq 'infile' &&
@@ -11067,7 +11087,10 @@ sub alignHelpCols
 	if(length($desc_remainder) > $desc_col_len ||
 	   $desc_remainder !~ /[^\n]{$desc_col_len}\n./s)
 	  {
-	    my $desc_start = substr($desc_remainder,0,$desc_col_len);
+	    #If the line begins with at least 4 spaces, allow the line length
+	    #to be longer than the column width (given this is the last column)
+	    my $desc_start = ($desc_remainder =~ /^ {4}/ ? $desc_remainder :
+			      substr($desc_remainder,0,$desc_col_len));
 	    my $next_char  =
 	      length($desc_remainder) > $desc_col_len ?
 		substr($desc_remainder,$desc_col_len - 1,1) : '';
@@ -11100,7 +11123,7 @@ sub alignHelpCols
 	      {
 		my $pat = $desc_start;
 		chop($desc_start) if($added_hyphen);
-		if($desc_remainder =~ /\Q$pat\E\s*(.*)/s)
+		if($desc_remainder =~ /\Q$pat\E *\n?(.*)/s)
 		  {$desc_remainder = $1}
 		else
 		  {
@@ -11130,7 +11153,7 @@ sub alignHelpCols
 	$first = 0;
       }
 
-    $out =~ s/\s*$/\n/;
+    $out =~ s/\s*$/\n\n/;
 
     debug({LEVEL => -1},"Returning: [$out]");
 
@@ -11533,7 +11556,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.055';
+    $VERSION       = '4.056';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
