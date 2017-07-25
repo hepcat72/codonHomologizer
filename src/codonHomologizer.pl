@@ -2490,6 +2490,9 @@ sub aaSegmentAlign
 	#Append each sequence (or gap characters)
 	foreach my $id (keys(%$alnseqs))
 	  {
+	    #If this sequence was aligned (it wouldn't if the coordinates in
+	    #the segment file abutted in one sequence and not in another),
+	    #append it (otherwise, append an artificial gap)
 	    if(exists($segrecs->{$id}))
 	      {
 		chomp($segrecs->{$id}->[1]);
