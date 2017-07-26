@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.8';
+our $VERSION = '1.9';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -1606,8 +1606,8 @@ sub matrixToString
     my $matrix = $_[0];
 
     #Include the protein weight matrix
-    my $string = "Alignment Weight Matrix:\n\n" . pwMatrixToString($matrix) .
-      "\n";
+    my $string = "Alignment Weight Matrix (not used in alignment if -w was " .
+      "supplied):\n\n" . pwMatrixToString($matrix) . "\n";
 
     #Include the flex codes used
     $string .= "Codon Match Flexibility scores:\n\n";
@@ -2389,7 +2389,7 @@ sub aaSegmentAlign
     my $alnseqs = {};
     my $cnt     = 0;
     my $counts  = {};
-    my $seen   = {};
+    my $seen    = {};
     foreach my $rec (@$aaseqs)
       {
 	my $def = $rec->[0];
@@ -2548,16 +2548,24 @@ sub getMuscleMultipleAlignment
 
 sub getExe
   {
-    my $cmd = $_[0];
-    my $exe = '';
+    my $command  = $_[0];
+    my $sent_exe = $command;
+    $sent_exe    =~ s/ .*//;
+    my $exe      = '';
 
     if(eval("use File::Which;1;") ||
        eval("use local::lib;use File::Which;1;"))
-      {$exe = which($cmd)}
+      {
+	$exe = which($sent_exe);
+	if((!defined($exe) || $exe eq '') && -e $sent_exe && -x $sent_exe)
+	  {$exe = $sent_exe}
+	elsif(!defined($exe))
+	  {$exe = ''}
+      }
     else
       {
 	verbose("File::Which not found, switching to backup method.");
-	$exe = `which $cmd`;
+	$exe = `which $sent_exe`;
 	chomp($exe);
 	if($exe =~ /which: Command not found./ || $exe !~ /\S/)
 	  {
@@ -3488,9 +3496,9 @@ sub insertGapCoords
   {
     my $array = $_[0];
     my $hash  = $_[1];
-    my $obj = {};
+    my $obj   = {};
 
-    my $real_indexes = [];
+    my $not_all_undefs = [];
 
     foreach my $row (@$array)
       {
@@ -3509,14 +3517,14 @@ sub insertGapCoords
 		#all the pairs of coordinates in another column.  Any column
 		#without a "real" value will be filtered out at the bottom of
 		#this sub.  The 0 below is set whenever the segments object has
-		#grown larger than the real_indexes array.
-		if(scalar(@$real_indexes) < scalar(@{$obj->{ALL}->{$id}}))
-		  {$real_indexes->[$#{$obj->{ALL}->{$id}}] = 0}
+		#grown larger than the not_all_undefs array.
+		if(scalar(@$not_all_undefs) < scalar(@{$obj->{ALL}->{$id}}))
+		  {$not_all_undefs->[$#{$obj->{ALL}->{$id}}] = 0}
 	      }
 	    else
 	      {
 		push(@{$obj->{ALL}->{$id}}, [($c + 1),($row->[$i] - 1)]);
-		$real_indexes->[$#{$obj->{ALL}->{$id}}] = 1;
+		$not_all_undefs->[$#{$obj->{ALL}->{$id}}] = 1;
 	      }
 
 	    #Determine the next/end coordinate in the pair
@@ -3550,7 +3558,7 @@ sub insertGapCoords
 
 	    #Push the current pair on
 	    push(@{$obj->{ALL}->{$id}},[$row->[$i],$end]);
-	    $real_indexes->[$#{$obj->{ALL}->{$id}}] = 1;
+	    $not_all_undefs->[$#{$obj->{ALL}->{$id}}] = 1;
 	    $c = $end;
 	  }
 
@@ -3558,13 +3566,13 @@ sub insertGapCoords
 	if($obj->{ALL}->{$id}->[-1]->[1] == $size)
 	  {
 	    push(@{$obj->{ALL}->{$id}},undef);
-	    if(scalar(@$real_indexes) < scalar(@{$obj->{ALL}->{$id}}))
-	      {$real_indexes->[$#{$obj->{ALL}->{$id}}] = 0}
+	    if(scalar(@$not_all_undefs) < scalar(@{$obj->{ALL}->{$id}}))
+	      {$not_all_undefs->[$#{$obj->{ALL}->{$id}}] = 0}
 	  }
 	else
 	  {
 	    push(@{$obj->{ALL}->{$id}},[($c + 1),$size]);
-		$real_indexes->[$#{$obj->{ALL}->{$id}}] = 1;
+		$not_all_undefs->[$#{$obj->{ALL}->{$id}}] = 1;
 	  }
       }
 
@@ -3581,7 +3589,7 @@ sub insertGapCoords
     #gaps between pairs of columns, grep out those indexes
     foreach my $id (keys(%{$obj->{ALL}}))
       {$obj->{ALL}->{$id} = [map {$obj->{ALL}->{$id}->[$_]}
-			     grep {$real_indexes->[$_]}
+			     grep {$not_all_undefs->[$_]}
 			     (0..$#{$obj->{ALL}->{$id}})]}
 
     debug("Segment coordinate pairs after missing gap filtering:\n[",
