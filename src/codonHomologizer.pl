@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.9';
+our $VERSION = '1.10';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -383,9 +383,9 @@ END_DETAIL
 
 my $rpt_usage_maxes = [0.1];
 addArrayOption(GETOPTKEY   => 'usage-reporting-max=s',
-	       GETOPTVAL   => $rpt_stretch_mins,
+	       GETOPTVAL   => $rpt_usage_maxes,
 	       REQUIRED    => 0,
-	       DEFAULT     => $rpt_stretch_mins,
+	       DEFAULT     => $rpt_usage_maxes,
 	       HIDDEN      => 0,
 	       INTERPOLATE => 1,
 	       DETAIL_DESC => << "END_DETAIL"
@@ -1041,26 +1041,26 @@ sub calculateMetrics
     my $rarest_usg2 = undef;
     for(my $i = 0;$i < length($seq1);$i++)
       {
-	my $aa1 = uc(substr($seq1,$i,1));
-	my $aa2 = uc(substr($seq2,$i,1));
+	my $nt1 = uc(substr($seq1,$i,1));
+	my $nt2 = uc(substr($seq2,$i,1));
 
-	if($aa1 ne '-')
+	if($nt1 ne '-')
 	  {
 	    $framepos1++;
-	    $codon1 .= $aa1;
+	    $codon1 .= $nt1;
 	  }
-	if($aa2 ne '-')
+	if($nt2 ne '-')
 	  {
 	    $framepos2++;
-	    $codon2 .= $aa2;
+	    $codon2 .= $nt2;
 	  }
 
-	if($aa1 ne '-' && $aa2 ne '-')
+	if($nt1 ne '-' && $nt2 ne '-')
 	  {
 	    if($framepos1 != $framepos2)
 	      {$frame_shifts++}
 
-	    if($aa1 eq $aa2)
+	    if($nt1 eq $nt2)
 	      {
 		$ident++;
 		$stretch_len++;
