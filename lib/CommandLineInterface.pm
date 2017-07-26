@@ -2156,10 +2156,17 @@ sub addArrayOption
 
     $general_flag_hash->{$get_opt_ref} = $flag;
 
+    my $def_str = $default;
+    if(ref($default) eq 'ARRAY' && scalar(grep {ref($_) ne ''} @$default) == 0)
+      {$def_str = join(',',map {defined($_) ? $_ : 'undef'} @$default)}
+    elsif(ref($def_str) ne '')
+      {warning("Default value supplied to addArrayOption should either be a ",
+	       "scalar or a reference to an array of scalars.")}
+
     addOption($get_opt_str,
 	      $sub,
 	      $required,
-	      $default,
+	      $def_str,
 	      $hidden,
 	      $smry_desc,
 	      $detail_desc,
@@ -2273,10 +2280,23 @@ sub add2DArrayOption
 
     $general_flag_hash->{$get_opt_ref} = $flag;
 
+    my $def_str = $default;
+    if(ref($default) eq 'ARRAY' &&
+       scalar(grep {ref($_) ne 'ARRAY'} @$default) == 0 &&
+       scalar(grep {my $a=$_;scalar(grep {ref($_) ne ''} @$a)} @$default) == 0)
+      {$def_str =
+	 '(' . join('),(',map {my $a=$_;'(' .
+				 join('),(',map {defined($_) ? $_ : 'undef'}
+				      @$a) . ')'} @$default) . ')'}
+    elsif(ref($def_str) ne '')
+      {warning("Default value supplied to addArrayOption should either be a ",
+	       "scalar or a reference to an array of references to arrays of ",
+	       "scalars.")}
+
     addOption($get_opt_str,
 	      $sub,
 	      $required,
-	      $default,
+	      $def_str,
 	      $hidden,
 	      $smry_desc,
 	      $detail_desc,
@@ -11556,7 +11576,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.056';
+    $VERSION       = '4.057';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
