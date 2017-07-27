@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.10';
+our $VERSION = '1.11';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -483,7 +483,7 @@ if($prealigned)
     if(scalar(@incompats))
       {
 	error("[-r] is incompatible with: [",join(',',@incompats),"].",
-	      {DETAIL => "When supply a pre-computed alignment, options " .
+	      {DETAIL => "When supplying a pre-computed alignment, options " .
 	       "having to do with aligning the submitted sequences, such as " .
 	       "which alignment method to use and what matrix to use, are " .
 	       "ambiguous.  Please either eliminate -r or [" .
@@ -1921,7 +1921,17 @@ sub writeMatrixFile
   {
     my $file   = $_[0];
     my $matrix = $_[1];
+
+    #The best score is assumed to be a perfect match.  We'll use that for the
+    #column width
     my $colwid = 2;
+    foreach my $aa (sort {$a eq '*' || $b eq '*' ? $b cmp $a : $a cmp $b}
+		    keys(%$matrix))
+      {
+	my $score = roundInt($matrix->{$aa}->{$aa}->{SCORE});
+	if(length($score) > $colwid)
+	  {$colwid = length($score)}
+      }
 
     if(!defined($file))
       {return(0)}
@@ -1929,21 +1939,35 @@ sub writeMatrixFile
     openOut(*MATO,$file,0) || return(0);
 
     print MATO << "END_HEAD"
-#This matrix was produced by codonHomologizer.pl version 1.0 [8-Jul-17]
+#This matrix was produced by codonHomologizer.pl version $VERSION [8-Jul-17]
 #Crossover Homology and Usage Matrix
 #Max possible score (though may not be present based on usage omissions) = 25
 #Min possible score = 0
+#NOTE: An 'X' row/column was added only to work around a bug in muscle when
+#      reading matrix files.  It is otherwise un-used.  See:
+#      http://www.drive5.com/muscle/manual/mx_sym.html
 #
 END_HEAD
       ;
 
-    print MATO ('   ',join('  ',sort {$a eq '*' || $b eq '*' ?
-					$b cmp $a : $a cmp $b} keys(%$matrix)),
+    print MATO (' ',(' ' x $colwid),
+		join((' ' x $colwid),
+		     map {$_ eq '*' ? 'X' . (' ' x $colwid) . $_ : $_}
+		     sort {$a eq '*' || $b eq '*' ?
+			     $b cmp $a : $a cmp $b} keys(%$matrix)),
 		"\n");
 
     foreach my $aa1 (sort {$a eq '*' || $b eq '*' ? $b cmp $a : $a cmp $b}
 		     keys(%$matrix))
       {
+	#If this is the last row, print a row for 'X'
+	if($aa1 eq '*')
+	  {
+	    #This will include enough 0s for the X column that's added when the
+	    #'*' column is encountered below.
+	    print MATO ('X',(map {' ' . (' ' x ($colwid - 1)) . '0'}
+			      (0..scalar(keys(%$matrix)))),"\n");
+	  }
 	print MATO $aa1;
 	foreach my $aa2 (sort {$a eq '*' || $b eq '*' ? $b cmp $a : $a cmp $b}
 			 keys(%$matrix))
@@ -1952,7 +1976,11 @@ END_HEAD
 	    my $score = roundInt($matrix->{$lesser}->{$greater}->{SCORE});
 	    my $len = length($score);
 	    my $l = $colwid - $len;
-	    print MATO (' ',                          #Column spacer
+	    print MATO (($aa2 ne '*' ? '' :
+			 (' ',                        #Column spacer for X col
+			  (' ' x ($colwid - 1)),      #Right-align for X col
+			  '0')),                      #Score for X col
+			' ',                          #Column spacer
 			($l < 1 ? '' : (' ' x $l)),   #Right-align
 			$score);                      #Score
 	  }
