@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.11';
+our $VERSION = '1.12';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -763,6 +763,8 @@ while(nextFileCombo())
 	#sequence will be aligned with the respective pair from each other
 	#sequence.
 	$segments_obj = readSegmentFile($segmentFile,$aaSeqs,$aaFile);
+
+	next if(!defined($segments_obj));
       }
     else
       {undef($segments_obj)}
@@ -2344,7 +2346,7 @@ sub writeNTPairs
     my $nt_pairs = $_[0];
     my $outfile  = $_[1];
 
-    openOut(*NT,$outfile);
+    openOut(*NT,$outfile) || return();
 
     foreach my $pair (@$nt_pairs)
       {
@@ -3463,8 +3465,15 @@ sub readSegmentFile
 			   $raw_coords->[$_] < $c);
 			$c = $raw_coords->[$_];$res} (1..$#{$raw_coords})))
 	  {
+	    $c = 0;
+	    my @errs = map {$raw_coords->[$_]}
+	      grep {my $res =
+		      ($_ % 2 ? $raw_coords->[$_] <= $c :
+		       $raw_coords->[$_] < $c);
+		    $c = $raw_coords->[$_];$res} (1..$#{$raw_coords});
 	    error("Each pair of coordinate columns must have coordinates in ",
-		  "ascending order.  Coordinates on line [$line_num] in file ",
+		  "ascending order.  There is a problem with coordinates: [",
+		  join(',',@errs),"] on line [$line_num] in file ",
 		  "[$file] are not properly ordered.",
 		  {DETAIL => ("The first coordinate of each pair must be " .
 			      "greater than the coordinate in the previous " .
