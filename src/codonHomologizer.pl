@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.12';
+our $VERSION = '1.13';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -93,7 +93,8 @@ addOption(GETOPTKEY   => 'f|aa-seq-format=s',
 	  REQUIRED    => 0,
 	  DEFAULT     => $seq_format,
 	  HIDDEN      => 0,
-	  DETAIL_DESC => 'Amino acid sequence file format.  Applies to files submitted using -i and',
+	  DETAIL_DESC => ('Amino acid sequence file format.  Applies to ' .
+			  'files submitted using -i and -e.'),
 	  ACCEPTS     => $sequence_formats);
 
 my $codon_file_type =
