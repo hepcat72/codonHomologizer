@@ -2,7 +2,7 @@
 
 use 5.010001;
 use ExtUtils::MakeMaker;
-my @scripts = qw(codonHomologizer.pl);
+my @scripts = qw(codonHomologizer.pl stretchAlign.pl);
 
 if(incompatibleMuscle(getExe('muscle')))
   {print STDERR ("WARNING: Muscle appears to be missing or potentially ",
