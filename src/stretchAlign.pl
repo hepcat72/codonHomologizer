@@ -579,6 +579,7 @@ sub getMaxStretches
 				$start_time = time();
 			      }
 			  }
+
 			verboseOverMe("Progress: ",int($first /
 						       (length($seq1) -
 							$mat_size) * 100),
