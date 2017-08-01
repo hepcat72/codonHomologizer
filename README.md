@@ -4,6 +4,8 @@
 
 This script, given a set of amino acid sequences and a codon usage table, constructs the underlying genetic sequences to optimize them for crossover events.  It takes 2 or more protein sequences, aligns them to optimize codon homology (using a custom amino acid weight matrix as input to a multiple sequence alignment tool (muscle)), and then recodes the amino acid sequences to be more homologous at the DNA level.  It utilizes the supplied codon usage table to prefer codons that are more common in a particular organism.
 
+For information on stretchAlign.pl, see below.
+
 ## DETAILS:
 
 Note, the alignment step is a multiple sequence alignment, but the sequence construction step is pair-wise.  Each sequence is produced multiple times, optimized for crossover for every other sequence.
@@ -422,3 +424,232 @@ Example (BLOSUM62):
                                                                                                                                                                                                                                                                                                                          * OUTPUT FORMAT: --aa-aln-suffix
 
 The format output by the tool selected by -x/-y.
+
+
+# stretchAlign.pl version 0.001
+
+## WHAT IS THIS:
+
+This script, given a set of very dissimilar amino acid sequences, will locate all (sequentially ordered) stretches of identical residues between every possible pair and output a table of coordinates.  The coordinate table can then be supplied to the companion script "codonHomologizer.pl" to force the alignment to align these stretches of identity together.  It will preferentially select a combination of stretches that will create the fewest gaps in the final alignment produced by codonHomologizer (ignoring end gaps).
+
+A word of caution: This is an exhaustive & recursive search.  There are combinations of parameters that can yield very long runtimes.  The search can be very fast by narrowing the relative coordinate window in which to search for identity.  A minimum of 3 idential AA residues is enforced, but you can use --force to over-ride the restriction.
+
+## DETAILS:
+
+This script finds identical stretches of the requested length only, however if a stretch of identity is some multiple of the requested stretch size, the resulting coordinates in the output table will be merged.
+
+A hash is used in the search.  The search is case-insensitive.
+
+This script was created for very dissimilar sequences because existing alignment tools do not align to optimize stretches of identity, yet stretches of identity are required for crossover events to occur.^  If your sequences are very similar, this script is unnecessary.
+
+^ https://www.ncbi.nlm.nih.gov/pubmed/27671930
+
+## USAGE
+
+    stretchAlign.pl -i "input file(s)" [options]
+
+     -i                   REQUIRED [stdin if present] Amino acid sequence file.
+     -s                   OPTIONAL [3] Stretch size.
+     --help               OPTIONAL Print general info and file formats.
+     --extended           OPTIONAL Print extended usage.
+
+## ADVANCED USAGE
+
+    stretchAlign.pl -i "input file(s)" [-s,-g,-l,-r,-m,-t,-p,-f,-o,-x,-e,--dir,--outfile,--help,--dry-run]
+    stretchAlign.pl -i "input file(s)" [-s,-g,-l,-r,-m,-t,-p,-f,-o,-x,-e,--dir,--outfile,--help,--dry-run] < input_file
+
+     -i,--aa-file,*       REQUIRED [stdin if present] Input file(s).  Space
+                                   separated, globs OK (e.g. $flag "*.input
+                                   [A-Z].{?,??}.inp").  See --help for file
+                                   format.  May be supplied on standard in.
+                                   When standard input detected and -i is given
+                                   only 1 argument, it will be used as a file
+                                   name stub for appending outfile suffixes.
+                                   See --extended --help for advanced usage
+                                   examples.
+                                   *No flag required.
+     -s,--stretch-size    OPTIONAL [3] This is the length with which to look
+                                   for perfect matches between pairs of
+                                   sequences.  Only a series of matches of this
+                                   length (or multiples of this length) will be
+                                   found.  The script must be re-run to look
+                                   for multiple lengths.
+     -g,                  OPTIONAL [auto*] Matches between sequences are only
+     --offset-max-global           found if they occur within this relative
+                                   coordinate range.  E.g. If this value is set
+                                   to N, a match at coordinate 100 in sequence
+                                   1 will only be reported if it occurs
+                                   (/starts) in sequence 2 between coordinates
+                                   100-N and 100+N.However, matches are forced
+                                   to be sequential.  In other words, once a
+                                   match is located, the next match is
+                                   restricted to everything to the right in
+                                   each sequence.  Must be greater than or
+                                   equal to --offset-max-local.  *If the
+                                   difference between lengths of the sequences
+                                   is greater than [50], the default range is
+                                   the lesser of either the sequence size
+                                   difference or [100].
+     -l,                  OPTIONAL [auto*] Each sequential match between
+     --offset-max-local            sequences are only allowed to be found if
+                                   they occur within this coordinate range
+                                   relative to the positions of the previous
+                                   match.  E.g. If this value is set to N and
+                                   the previous match was at positions 100 and
+                                   200 for sequences 1 and 2 respectively, a
+                                   match at coordinate 1000 in sequence 1 will
+                                   only be reported if it occurs (/starts) in
+                                   sequence 2 between coordinates 1100-N and
+                                   1100+N.However, matches are forced to be
+                                   sequential.  In other words, once a match is
+                                   located, the next match is restricted to
+                                   everything to the right in each sequence.
+                                   Must be less than or equal to
+                                   --offset-max-global.  *The default value is
+                                   the value of --offset-max-global.
+     -r,                  OPTIONAL [1] The maximum proportion of anticipated
+     --gap-ratio-max-              gaps to be created between a pair of
+     local                         stretches (see -s).  In other words, this is
+                                   the difference in size of the sequences
+                                   between a pair of stretches over the longer
+                                   of the two.  A value between 0 and 1 is
+                                   recommended, but it can be greater than 1.
+                                   See -m for an alternative gap control.
+     -m,--gap-max         OPTIONAL [infinity] Stretch positions are restricted
+                                   to a range (see -g and -l), but many gaps
+                                   can be created in the resulting global
+                                   alignment after submitting to
+                                   codonHomologizer.  While this maximum cannot
+                                   control preceisely how many gaps will be
+                                   used in the alignment, it can ensure that
+                                   the sum total of length differences between
+                                   the stretches (see -s) found is kept under
+                                   this maximum.
+     -t,--time-limit      OPTIONAL [60] Report the best solution found for a
+                                   pair of sequences after searching for this
+                                   number of seconds.  Every possible pair will
+                                   get this many seconds to find the largest
+                                   number of stretches that meet all the
+                                   requirements.  See -p to reset this time
+                                   restriction upon finding a better solution.
+                                   Set to 0 to search all possible solutions
+                                   with no time limit.
+     -p,                  OPTIONAL [1] As long as the solution keeps improving,
+     --improvement-reset           reset the --time-limit.  Only finding
+                                   solutions with more stretches (see -s) will
+                                   reset the timer.  Improved solutions with
+                                   fewer alignment gaps, but the same number of
+                                   stretches will not reset the timer.
+     -f,--aa-seq-format   OPTIONAL [auto]{auto, fasta, fastq} Amino acid
+                                   sequence file format.  Applies to files
+                                   submitted using -i.
+     -o,--outfile-suffix  OPTIONAL [.seg] The extension of the output
+                                   tab-delimited coordinate file of matching
+                                   stretches (to be supplied to
+                                   codonHomologizer.pl using the -d option).
+                                   An outfile for every pair of sequences in -i
+                                   will be created using a numeric ID per pair
+                                   and prepended to this suffix (e.g. .1.seg,
+                                   .2.seg,...).
+     -x,--aa-pair-suffix  OPTIONAL [.faa] Every pair of sequences used to find
+                                   matching stretches (see -i and -s) generates
+                                   a stretch coordinate file (see -o).  If
+                                   there are more than 2 sequences in the
+                                   supplied sequence file (see -i), a
+                                   corresponding fasta file (per pair) will be
+                                   generated with this extension in order to be
+                                   supplied with the stretch coordinate file to
+                                   codonHomologizer using codonHomologizer's -i
+                                   option.  An outfile for every pair of
+                                   sequences will be created using a numeric ID
+                                   per pair and prepended to this suffix (e.g.
+                                   .1$aa_suffix, .2$aa_suffix,...).  The pair
+                                   ID will correspond to the pair ID of the
+                                   --outfile-suffix.
+     -e,                  OPTIONAL [0] Pad the coordinates of the found
+     --expand-coords-by            stretches by this amount.  This can help
+                                   coerce the alignment algorithm used in
+                                   codonHomologizer to abutt non-matching amino
+                                   acids with the stretch so that selected
+                                   codons could potentially lengthen the
+                                   stretch of homology by a nucleotide or 2.
+     --dir,--outdir       OPTIONAL [none] All outfiles will be put in this
+                                   directory.
+     --outfile,           OPTIONAL [stdout] Output file(s) - a named outfile
+     --output-file                 that is a mutually exclusive alternative to
+                                   supplying an outfile suffix.  Space
+                                   separated.
+     --help               OPTIONAL [1] Print general info and file format
+                                   descriptions.  Includes advanced usage
+                                   examples with --extended.
+     --dry-run            OPTIONAL Run without generating output files.
+     --verbose            OPTIONAL Verbose mode/level.  (e.g. --verbose 2)
+     --quiet              OPTIONAL Quiet mode.
+     --overwrite          OPTIONAL Overwrite existing output files.  By
+                                   default, existing output files will not be
+                                   over-written.  Supply twice to safely*
+                                   remove pre-existing output directories (see
+                                   --outdir).  Mutually exclusive with
+                                   --skip-existing and --append.
+                                   *Will not remove a directory containing
+                                   manually touched files.
+     --skip-existing      OPTIONAL Skip existing output files.  Mutually
+                                   exclusive with --overwrite and --append.
+     --append             OPTIONAL Append to existing output files.  Mutually
+                                   exclusive with --overwrite and
+                                   --skip-existing.
+     --force              OPTIONAL Prevent script-exit upon critical error and
+                                   continue processing.  Supply twice to
+                                   additionally prevent skipping the processing
+                                   of input files that cause errors.  Use this
+                                   option with extreme caution.  This option
+                                   will not over-ride over-write protection.
+                                   See also --overwrite or --skip-existing.
+     --header,--noheader  OPTIONAL [On] Print commented script version, date,
+                                   and command line call to each output file.
+     --debug              OPTIONAL Debug mode/level.  (e.g. --debug --debug)
+                                   Values less than 0 debug the template code
+                                   that was used to create this script.
+     --error-type-limit   OPTIONAL [5] Limits each type of error/warning to
+                                   this number of outputs.  Intended to
+                                   declutter output.  Note, a summary of
+                                   warning/error types is printed when the
+                                   script finishes, if one occurred or if in
+                                   verbose mode.  0 = no limit.  See also
+                                   --quiet.
+     --version            OPTIONAL Print version info.  Includes template
+                                   version with --extended.
+     --save-as-default    OPTIONAL Save the command line arguments.  Saved
+                                   defaults are printed at the bottom of this
+                                   usage output and used in every subsequent
+                                   call of this script.  Supplying this flag
+                                   replaces current defaults with all options
+                                   that are provided with this flag.  Values
+                                   are stored in [$defdir].
+                                   See --help --extended for changing script
+                                   behavior when no arguments are supplied on
+                                   the command line.
+     --pipeline-mode      OPTIONAL Supply this flag to include the script name
+                                   in errors, warnings, and debug messages.  If
+                                   not supplied, the script will try to
+                                   determine if it is running within a series
+                                   of piped commands or as a part of a parent
+                                   script.
+     --extended           OPTIONAL Print extended usage/help/version/header
+                                   (and errors/warnings where noted).  Supply
+                                   alone for extended usage.  Includes extended
+                                   version in output file headers.
+                                   Incompatible with --noheader.  See --help &
+                                   --version.
+
+## INPUT FORMAT: -i, --aa-file
+
+The amino acid sequence file can be in fasta or fastq format.  There must be 2 or more sequences.  This is an unaligned sequence file.  Any alignment characters present such as gap characters ('-') or spaces will be removed.  It may be upper or lower case.
+
+## OUTPUT FORMAT: -o, --outfile-suffix, --outfile, --output-file
+
+Tab-delimited text file.  The first column is the sequence ID, as parsed from the deflines of -i.
+
+## OUTPUT FORMAT: -x, --aa-pair-suffix
+
+Fasta format.
