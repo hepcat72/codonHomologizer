@@ -444,7 +444,7 @@ This script was created for very dissimilar sequences because existing alignment
 
 ^ https://www.ncbi.nlm.nih.gov/pubmed/27671930
 
-## USAGE
+## USAGE (stretchAlign)
 
     stretchAlign.pl -i "input file(s)" [options]
 
@@ -453,7 +453,7 @@ This script was created for very dissimilar sequences because existing alignment
      --help               OPTIONAL Print general info and file formats.
      --extended           OPTIONAL Print extended usage.
 
-## ADVANCED USAGE
+## ADVANCED USAGE (stretchAlign)
 
     stretchAlign.pl -i "input file(s)" [-s,-g,-l,-r,-m,-t,-p,-f,-o,-x,-e,--dir,--outfile,--help,--dry-run]
     stretchAlign.pl -i "input file(s)" [-s,-g,-l,-r,-m,-t,-p,-f,-o,-x,-e,--dir,--outfile,--help,--dry-run] < input_file
