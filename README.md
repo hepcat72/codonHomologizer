@@ -1,6 +1,4 @@
-# codonHomologizer.pl version 1.13
-Created: 6/27/2017
-Last Modified: Mon Jul 31 18:05:08 2017
+# codonHomologizer.pl
 
 ## WHAT IS THIS:
 
