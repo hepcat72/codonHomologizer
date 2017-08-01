@@ -39,6 +39,15 @@ After installing muscle, cd into the codonHomologizer directory and run the foll
     perl Makefile.PL
     make
     sudo make install
+    
+## USAGE
+
+    codonHomologizer.pl -c "input file(s)" [options]
+
+     -c                   REQUIRED Codon usage file.
+     -i                   OPTIONAL [stdin if present] Amino acid sequence file.
+     --help               OPTIONAL Print general info and file formats.
+     --extended           OPTIONAL Print extended usage.
 
 ## INPUT FORMAT: -i, --aa-file
 
@@ -58,7 +67,8 @@ A tab- or space- delimited file of codon usage scores.  The first column is the 
     D	GAC	0.35	Asp
     ...
 
-## INPUT FORMAT: -w, --precomputed-weight-matrix                                                                           
+## INPUT FORMAT: -w, --precomputed-weight-matrix     
+
 The format of the weight matrix file is the same as is used by sequence alignment tools such as clustalw and muscle.  There is a row and column for every single-letter aminco acid code and each cell contains a score representing how good of a match the pair of amino acids is (i.e. how similar they are).  The last row and column (represented by '*') contains the minimum score.  Examples of these matrices can be found (at the time of this writing) here:
 
 ftp://ftp.ncbi.nih.gov/blast/matrices/
