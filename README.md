@@ -426,7 +426,7 @@ Example (BLOSUM62):
 The format output by the tool selected by -x/-y.
 
 
-# stretchAlign.pl version 0.001
+# stretchAlign.pl
 
 ## WHAT IS THIS:
 
