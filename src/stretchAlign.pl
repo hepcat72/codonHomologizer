@@ -404,6 +404,8 @@ while(nextFileCombo())
 	    $segfile .= (scalar(@$recs) > 2 ? ".$pair_id" : '') . $extension;
 	    openOut(*SEG,$segfile) || next;
 
+	    my $expanded = expandWithoutConflict($stretches);
+
 	    print("#Stretch Size: $mat_size\n",
 		  "#Offset Max Global: $global_play\n",
 		  "#Offset Max Local: $local_play\n",
@@ -420,15 +422,11 @@ while(nextFileCombo())
 		  (scalar(@$stretches) ?
 		   join("\t",
 			(parseIDFromDef($recs->[$first]->[0]),
-			 map {($_->[1] + 1 - $expand_by) . "\t" .
-				($_->[1] + length($_->[0]) + $expand_by)}
-			 @$stretches)) .
+			 map {$_->[1]} @$expanded)) .
 		   "\n" .
 		   join("\t",
 			(parseIDFromDef($recs->[$second]->[0]),
-			 map {($_->[2] + 1 - $expand_by) . "\t" .
-				($_->[2] + length($_->[0]) + $expand_by)}
-			 @$stretches)) .
+			 map {$_->[2]} @$expanded)) .
 		   "\n" : ''));
 
 	    closeOut(*SEG);
@@ -453,6 +451,62 @@ while(nextFileCombo())
       }
   }
 
+#Globals used: $expand_by
+sub expandWithoutConflict
+  {
+    my $stretches = $_[0];
+
+    if(scalar(@$stretches) == 0)
+      {return($stretches)}
+    elsif(length($stretches->[0]->[0]) < 2 && $expand_by)
+       {warning("Stretch size: [",length($stretches->[0]->[0]) ,
+		"] is smaller than the built-in logic allows for the ",
+		"coordinate expansion size (see -e) of: [$expand_by] to work ",
+		"properly.  Coordinates could be off and should be checked ",
+		"manually.")}
+
+    my $expanded_stretches =
+      [map {
+	my $prevend1 = ($_ == 0 ? 0 :
+			$stretches->[$_ - 1]->[1] +
+			length($stretches->[$_ - 1]->[0]) + $expand_by);
+	my $prevend2 = ($_ == 0 ? 0 :
+			$stretches->[$_ - 1]->[2] +
+			length($stretches->[$_ - 1]->[0]) + $expand_by);
+	my $newstart1 = ($stretches->[$_]->[1] <= 0 ? 1 :
+			 $stretches->[$_]->[1] + 1 - $expand_by);
+	my $newstart2 = ($stretches->[$_]->[2] <= 0 ? 1 :
+			 $stretches->[$_]->[2] + 1 - $expand_by);
+	my $newend1 = ($stretches->[$_]->[1] + length($stretches->[$_]->[0]) +
+		       $expand_by);
+	my $newend2 = ($stretches->[$_]->[2] + length($stretches->[$_]->[0]) +
+		       $expand_by);
+	my $nextstart1 = ($_ eq $#{$stretches} ? 0 :
+			  ($stretches->[$_ + 1]->[1] + 1 - $expand_by));
+	my $nextstart2 = ($_ eq $#{$stretches} ? 0 :
+			  ($stretches->[$_ + 1]->[2] + 1 - $expand_by));
+
+	if($prevend1 > $newstart1 || $prevend2 > $newstart2)
+	  {
+	    debug("Incrementing starts: [$newstart1,$newstart2] because of ",
+		  "proximity to ends: [$prevend1,$prevend2].");
+	    $newstart1++;
+	    $newstart2++;
+	  }
+	if(($nextstart1 != 0 && $newend1 >= $nextstart1) ||
+	   ($nextstart2 != 0 && $newend2 >= $nextstart2))
+	  {
+	    debug("Decrementing ends: [$newend1,$newend2] because of ",
+		  "proximity to ends: [$nextstart1,$nextstart2].");
+	    $newend1--;
+	    $newend2--;
+	  }
+	[$stretches->[$_]->[0],"$newstart1\t$newend1","$newstart2\t$newend2"]}
+       (0..$#{$stretches})];
+
+    return($expanded_stretches);
+  }
+
 sub getMaxStretches
   {
     my $id1            = $_[0];
@@ -473,11 +527,11 @@ sub getMaxStretches
                                       #counting the first difference
     my $first          = $_[14] || 0;
 
-    debug("getMaxStretches1(",
+    debug({LEVEL => 2},"getMaxStretches1(",
 	  join(',',map {ref($_) eq '' ?
 			  (length($_) <= 15 ? $_ : substr($_,0,12) . '...') :
 			    ref($_)} @_),")\n");
-    debug("getMaxStretches2(",
+    debug({LEVEL => 2},"getMaxStretches2(",
 	  join(',',map {ref($_) eq '' ? (length($_) <= 15 ? $_ :
 					 substr($_,0,12) . '...') : ref($_)}
 	       ($id1,$seq1,$id2,$seq2,$hash,$mat_size,$global_play,
@@ -515,7 +569,7 @@ sub getMaxStretches
 		    $gap_ratio <= $gap_ratio_max) &&
 		   ($global_gap_max < 0 || $gap_tally <= $global_gap_max))
 		  {
-		    debug("getMaxStretches3(",
+		    debug({LEVEL => 2},"getMaxStretches3(",
 			  join(',',
 			       map {ref($_) eq '' ?
 				      (length($_) <= 15 ?
