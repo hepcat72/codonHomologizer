@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 setScriptInfo(CREATED => '7/31/2017',
               VERSION => $VERSION,
@@ -22,7 +22,7 @@ setScriptInfo(CREATED => '7/31/2017',
 
 This script, given a set of very dissimilar amino acid sequences, will locate all (sequentially ordered) stretches of identical residues between every possible pair and output a table of coordinates.  The coordinate table can then be supplied to the companion script "codonHomologizer.pl" to force the alignment to align these stretches of identity together.  It will preferentially select a combination of stretches that will create the fewest gaps in the final alignment produced by codonHomologizer (ignoring end gaps).
 
-A word of caution: This is an exhaustive & recursive search.  There are combinations of parameters that can yield very long runtimes.  The search can be very fast by narrowing the relative coordinate window in which to search for identity.  A minimum of 3 idential AA residues is enforced, but you can use --force to over-ride the restriction.
+A word of caution: This is an exhaustive & recursive search.  There are combinations of parameters that can yield very long runtimes.  The search can be very fast by narrowing the relative coordinate window in which to search for identity.  A minimum of 3 identical AA residues is enforced, but you can use --force to over-ride the restriction.
 
 END_HELP
 	      ,
@@ -255,7 +255,12 @@ addOption(GETOPTKEY   => 'e|expand-coords-by=i',
 			  'algorithm used in codonHomologizer to abutt non-' .
 			  'matching amino acids with the stretch so that ' .
 			  'selected codons could potentially lengthen the ' .
-			  'stretch of homology by a nucleotide or 2.'));
+			  'stretch of homology by a nucleotide or 2.  Note ' .
+			  'that expanding coordinates will not be allowed ' .
+			  'to overlap.  The start of a stretch of identity ' .
+			  'will be expanded before the end (of the previous ' .
+			  'match) because the last characters of a codon ' .
+			  'are usually more flexible to create homology.'));
 
 addOutdirOption(GETOPTKEY   => 'dir|outdir=s',
 		REQUIRED    => 0,
