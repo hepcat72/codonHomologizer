@@ -30,6 +30,18 @@ The Seg Aln Score is only present is the -d option is used to align for example,
 
 To evaluate a sequence (nt alignment) produced by another tool, you can use the -e option.  All this does is add entries to the Crossover Metrics table at the end of the run.
 
+## INSTALL
+
+Requires the multiple sequence alignment tool called muscle, available here:
+
+http://www.drive5.com/muscle/downloads.htm
+
+After installing muscle, cd into the codonHomologizer directory and run the following:
+
+    perl Makefile.PL
+    make
+    sudo make install
+
 ## INPUT FORMAT: -i, --aa-file
 
 The amino acid sequence file can be in fasta or fastq format.  There must be 2 or more sequences.  This is an unaligned sequence file.  Any alignment characters present such as gap characters ('-') or spaces will be removed.  It may be upper or lower case.  Codons for any ambiguous nucleotides will be generated as NNN.
