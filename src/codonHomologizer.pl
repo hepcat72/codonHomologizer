@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.16';
+our $VERSION = '1.17';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -291,7 +291,7 @@ END_DETAIL
 	 );
 
 my $prealigned = 0;
-addOption(GETOPTKEY   => 'r|precomputed-aa-alignment=s',
+addOption(GETOPTKEY   => 'r|precomputed-aa-alignment!',
 	  GETOPTVAL   => \$prealigned,
 	  REQUIRED    => 0,
 	  DEFAULT     => $prealigned,
