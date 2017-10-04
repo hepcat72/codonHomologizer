@@ -108,7 +108,7 @@ my($required_infile_types,
    $usage_file_indexes,
    $outfile_types_hash,
    $outfile_tagteams,
-   $tagteam_to_suffix_hash,
+   $tagteam_to_supplied_oid,
    $collid_modes_array,
    $def_collide_mode_suff,
    $def_collide_mode_outf,
@@ -116,6 +116,7 @@ my($required_infile_types,
    $default_infile_added,
    $default_outfile_added,
    $default_outfile_suffix_added,
+   $default_tagteam_added,
    $default_outfile_id,
    $default_outfile_suffix_id,
    $default_outdir_added,
@@ -243,12 +244,13 @@ sub _init
     $usage_file_indexes           = [];
     $outfile_types_hash           = {};
     $outfile_tagteams             = {}; #id=>{SUFFID/OUTFID/PRIMARY/REQUIRED...
-    $tagteam_to_suffix_hash       = {};
+    $tagteam_to_supplied_oid      = {};
     $collid_modes_array           = [];
     $outfile_mode_lookup          = {};
     $default_infile_added         = 0;
     $default_outfile_added        = 0;
     $default_outfile_suffix_added = 0;
+    $default_tagteam_added        = 0;
     $default_outfile_id           = undef;
     $default_outfile_suffix_id    = undef;
     $default_outdir_added         = 0;
@@ -857,7 +859,8 @@ sub isGetOptStrValid
 	  }
 	else
 	  {debug({LEVEL => -2},
-		 "Duplicate flags detected: [",join(',',@existing),"].")}
+		 "Duplicate flags detected: [",join(',',@existing),
+		 "], but allowed.")}
       }
 
     #General validity checks
@@ -1163,7 +1166,7 @@ sub addOutfileOption
 		    $file_type_index));
 
     ##
-    ## Create a hidden outfile_suffixes_array element for the faux input file
+    ## Create a hidden outfile_suffix_array element for the faux input file
     ##
 
     my $hidden_opt_str = join('|',
@@ -1294,7 +1297,7 @@ sub addOutfileSuffixOption
     my $get_opt_str     = $in[0]; #e.g. 'o|outfile-suffix=s'
     my $file_type_index = $in[1]; #Val returned from addInfileOption
                                   ##TODO: The default index definitely must be selected more intelligently. See requirement 179
-    my $get_opt_val     = $in[2];#A reference to a scalar
+    my $get_opt_val     = $in[2]; #A reference to a scalar
     my $required        = $in[3]; #Is suff required?: 0 (false) or non-0 (true)
     my $primary         = defined($in[4]) ? $in[4] : 1; #non-0=STDOUT if no suf
     my $default         = $in[5]; #e.g. '.out'
@@ -1318,7 +1321,8 @@ sub addOutfileSuffixOption
 
     if(defined($get_opt_val) && ref($get_opt_val) ne 'SCALAR')
       {
-	error("GETOPTVAL must be a reference to a SCALAR, but instead, a [",
+	error("GETOPTVAL must be a reference to a SCALAR to hold the value ",
+	      "for the outfile suffix string, but instead, a [",
 	      (ref($get_opt_val) eq '' ?
 	       'SCALAR' : 'reference to a ' . ref($get_opt_val)),
 	      "] was received.  Unable to add outfile suffix option.");
@@ -1598,13 +1602,110 @@ sub addOutfileSuffixOption
     return($suffix_id);
   }
 
-sub createOutfileTagteam
+sub addOutfileTagteamOption
   {
-    my $suffix_id  = $_[0];
-    my $outfile_id = $_[1];
-    my $required   = $_[2];
-    my $primary    = $_[3];
-    my $ttid       = -1 - scalar(keys(%$outfile_tagteams));
+    my @in = getSubParams([qw(GETOPTKEY_SUFF GETOPTKEY_FILE FILETYPEID
+			      PAIR_RELAT GETOPTVAL REQUIRED PRIMARY FORMAT_DESC
+			      DEFAULT DEFAULT_IS_FILE HIDDEN_SUFF HIDDEN_FILE
+			      SMRY_DESC_SUFF SMRY_DESC_FILE DETAIL_DESC_SUFF
+			      DETAIL_DESC_FILE COLLISIONMODE_SUFF
+			      COLLISIONMODE_FILE)],
+			  #If there are any params sent in, require the first
+			  [scalar(@_) == 0 ? () :
+			   #If there are at least 2 input file types, also
+			   #require the FILETYPEID
+			   (scalar(@$input_files_array) < 2 ?
+			    qw(GETOPTKEY_SUFF GETOPTKEY_FILE) :
+			    qw(GETOPTKEY_SUFF GETOPTKEY_FILE FILETYPEID))],
+			  [@_]);
+    my $get_opt_str_suff = $in[0];  #e.g. 'o|outfile-suffix=s'
+    my $get_opt_str_file = $in[1];  #e.g. 'outfile=s'
+    my $file_type_index  = $in[2];  #Val returned from addInfileOption
+    my $relationship     = $in[3];  #e.g. 1,1:1,1:M,1:1orM
+    my $get_opt_val      = $in[4];  #A reference to a scalar
+    my $required         = $in[5];  #Is outfile required?: 0=false non-0=true
+    my $primary          = $in[6];  #non-0=STDOUT if unsup
+    my $format_desc      = $in[7];  #e.g. 'Tab delim text w/ cols: 1.Name...'
+    my $default          = $in[8];  #e.g. '.out' or 'file.out'
+    my $default_is_file  = $in[9];  #0 or non-0.
+    my $hidden_suff      = $in[10]; #0 or non-0. Non-0 requires a default.
+                                    #Excludes from usage
+    my $hidden_file      = $in[11]; #0 or non-0. Non-0 requires a default.
+                                    #Excludes from usage
+    my $smry_desc_suff   = $in[12]; #e.g. Outfile extension.
+                                    #Empty/undefined = exclude from short usage
+    my $smry_desc_file   = $in[13]; #e.g. Output file.
+                                    #Empty/undefined = exclude from short usage
+    my $detail_desc_suff = $in[14]; #e.g. Outfile extension.  See --help for...
+    my $detail_desc_file = $in[15]; #e.g. Output file.  See --help for...
+    my $loc_collide_suff = $in[16]; #Adds to collid_modes_array
+			            #1 of: merge,rename,error
+    my $loc_collide_file = $in[17]; #Adds to collid_modes_array
+			            #1 of: merge,rename,error
+    my($suffix_id,$outfile_id);
+
+    #If no parameters were submitted, add the default options
+    if(scalar(@_) == 0)
+      {
+	if($default_tagteam_added)
+	  {
+	    error("A default outfile tagteam has already been added.");
+	    return(undef);
+	  }
+	$default_tagteam_added = 1;
+
+	$suffix_id  = addOutfileSuffixOption();
+	$outfile_id = addOutfileOption();
+      }
+    else
+      {
+	#There can only be 1 with a default
+	my($default_suff,$default_file) =
+	  (defined($default_is_file) && $default_is_file ?
+	   (undef,$default) : ($default,undef));
+
+	$suffix_id  = addOutfileSuffixOption($get_opt_str_suff,
+					     $file_type_index,
+					     $get_opt_val,
+					     $required,
+					     $primary,
+					     $default_suff,
+					     $hidden_suff,
+					     $smry_desc_suff,
+					     $detail_desc_suff,
+					     $format_desc,
+					     $loc_collide_suff);
+	$outfile_id = addOutfileOption($get_opt_str_file,
+				       $loc_collide_file,
+				       $required,
+				       $primary,
+				       $default_file,
+				       $smry_desc_file,
+				       $detail_desc_file,
+				       $format_desc,
+				       $hidden_file,
+				       $file_type_index,
+				       $relationship);
+      }
+
+    return(createSuffixOutfileTagteam($suffix_id,$outfile_id,0));
+  }
+
+#This sub links options created by addOutfileSuffixOption and addOutfileOption
+#in such a way that either one or the other can be supplied to generate output
+#file names.  It edits the options if there is a conflict in the options versus
+#what was supplied to this method.  Difference in PRIMARY and REQUIRED can
+#change the PRIMARY, REQUIRED, DEFAULT, and SUMMARY values in the usage.
+#DEFAULT and SUMMARY can change IF they contin default values that were
+#inflenced by PRIMARY and/or REQUIRED values.  Other variables are also edited
+#if PRIMARY and/or REQUIRED change: values in $usage_array,
+#$suffix_primary_vals, $required_outfile_types, & $required_suffix_types
+sub createSuffixOutfileTagteam
+  {
+    my $suffix_id     = $_[0];
+    my $outfile_id    = $_[1];
+    my $skip_existing = defined($_[2]) ? $_[2] : 0; #See addDefaultFileOptions
+    my $ttid          = -1 - scalar(keys(%$outfile_tagteams));
 
     if(!defined($suffix_id) ||
        scalar(@$suffix_id_lookup) <= $suffix_id ||
@@ -1631,23 +1732,17 @@ sub createOutfileTagteam
     #If one has a default, but the other was supplied on the command line, the
     #supplied one is what must be returned.  Thus, we must save the default
     #suffix:
-    my $infile_index = $suffix_id_lookup->[$suffix_id]->[0];
-    my $suffix_index = $suffix_id_lookup->[$suffix_id]->[1];
-
-    if(scalar(@$outfile_suffix_array) <= $infile_index ||
-       scalar(@{$outfile_suffix_array->[$infile_index]}) <= $suffix_index)
-      {
-	error("Could not find the suffix for suffix ID: [$suffix_id].");
-	return(undef);
-      }
-
-    my $default_suffix =
-      $outfile_suffix_array->[$infile_index]->[$suffix_index];
+    my $infile_index         = $suffix_id_lookup->[$suffix_id]->[0];
+    my $suffix_index         = $suffix_id_lookup->[$suffix_id]->[1];
+    my $outfile_index        = $suffix_id_lookup->[$outfile_id]->[0];
+    my $outfile_suffix_index = $suffix_id_lookup->[$outfile_id]->[1];
 
     #If this is being called from addDefaultFileOptions, figure out which
     #type was not default-added (if any) so that we can change the tagteam ID
     #to it (because the user won't otherwise have a way of retrieving the
     #default-added outfile type)
+    my $outf_explicit = 1;
+    my $suff_explicit = 1;
     if(isCaller('addDefaultFileOptions'))
       {
 	my $def_outf_suff_id = '';
@@ -1657,56 +1752,499 @@ sub createOutfileTagteam
 	if($default_outfile_suffix_added && $default_outfile_added &&
 	   $def_outf_suff_id eq $outfile_id &&
 	   $default_outfile_suffix_id eq $suffix_id)
-	  {$ttid = 0}
+	  {
+	    $ttid = 0;
+	    $outf_explicit = 0;
+	    $suff_explicit = 0;
+	  }
 	elsif($default_outfile_suffix_added && !$default_outfile_added &&
 	      $default_outfile_suffix_id eq $suffix_id)
-	  {$ttid = $outfile_id}
+	  {
+	    $ttid = $outfile_id;
+	    $suff_explicit = 0;
+	  }
 	elsif($default_outfile_added && !$default_outfile_suffix_added &&
 	      $def_outf_suff_id eq $outfile_id)
-	  {$ttid = $suffix_id}
+	  {
+	    $ttid = $suffix_id;
+	    $outf_explicit = 0;
+	  }
       }
 
+    #Make sure these IDs aren't involved in any other tagteams
     my $dupe = 0;
     if(scalar(grep {$_->{SUFFID} eq $suffix_id} values(%$outfile_tagteams)))
       {
-	error("The outfile (suffix) type ID [$suffix_id] already belongs to ",
-	      "an outfile tagteam.  Unable to add to another tagteam.");
+	my $already_outf_index =
+	  $suffix_id_lookup->[(grep {$_->{SUFFID} eq $suffix_id}
+			       values(%$outfile_tagteams))[0]->{OUTFID}]->[0];
+	error("The outfile suffix type [",getOutfileSuffixFlag($suffix_id),
+	      "] already belongs to an outfile tagteam with outfile type [",
+	      getOutfileFlag($already_outf_index),"].  Unable to add to ",
+	      "another tagteam.") unless($skip_existing);
 	$dupe = 1;
       }
     if(scalar(grep {$_->{OUTFID} eq $outfile_id} values(%$outfile_tagteams)))
       {
-	error("The outfile type ID [$outfile_id] already belongs to ",
-	      "an outfile tagteam.  Unable to add to another tagteam.");
+	my $already_suff_id = (grep {$_->{OUTFID} eq $outfile_id}
+			       values(%$outfile_tagteams))[0]->{SUFFID};
+	error("The outfile type [",getOutfileFlag($outfile_index),"] already ",
+	      "belongs to an outfile tagteam with outfile suffix type [",
+	      getOutfileSuffixFlag($already_suff_id),"].  Unable to add ",
+	      "to another tagteam.") unless($skip_existing);
 	$dupe = 1;
       }
     if($dupe)
-      {return(1)}
+      {return(undef)}
+
+    #If the suffix ID is not from addOutfileSuffixOption
+    if(exists($outfile_types_hash->{$infile_index}))
+      {
+	error("The outfile suffix ID submitted: [$suffix_id] does not appear ",
+	      "to be an outfile suffix ID, as the file option it is linked ",
+	      "to is an output file, possibly: [",
+	      getOutfileFlag($infile_index),
+	      "]?, and not an input file as expected.");
+	return(undef);
+      }
+    if(!exists($outfile_types_hash->{$outfile_index}))
+      {
+	error("The outfile ID submitted: [$outfile_id] does not appear to be ",
+	      "an outfile ID, as the file option it is linked to is an ",
+	      "input file, possibly: [",getFileFlag($outfile_index),
+	      "]?, and not an output file as expected.");
+	return(undef);
+      }
+
+    if(scalar(@$outfile_suffix_array) <= $infile_index ||
+       scalar(@{$outfile_suffix_array->[$infile_index]}) <= $suffix_index)
+      {
+	error("Could not find the suffix for suffix ID: [$suffix_id].");
+	return(undef);
+      }
+
+    #Make sure that if the outfile option has a PAIR_WITH value, it is the same
+    #as the FILETYPEID of the suffix option, otherwise - fatal error.
+    if(scalar(grep {$outfile_index == $_->[0] && $infile_index != $_->[1]}
+	      @$required_relationships))
+      {
+	my $relat_index = (map {$_->[1]} grep {$outfile_index == $_->[0]}
+			   @$required_relationships)[0];
+	error('Outfile tagteam error: suffix [',
+	      getOutfileSuffixFlag($suffix_id),'] and outfile [',
+	      getOutfileFlag($outfile_index),'] types are not associated ',
+	      'with the same input file type: [',getFileFlag($infile_index),
+	      '] versus [',getFileFlag($relat_index),'] respectively.',
+	      {DETAIL => ('An outfile tagteam must be between an outfile ' .
+			  "suffix type [ID: $suffix_id] and an outfile " .
+			  "type [ID: $outfile_id OUTFILE INDEX: " .
+			  "$outfile_index] that are associated with the " .
+			  'same input file type [INFILE INDEX ' .
+			  "$infile_index != PAIR_RELAT $relat_index].")});
+	return(undef);
+      }
+    #Else if a relationship wasn't saved at all
+    elsif(scalar(grep {$outfile_index == $_->[0]}
+		 @$required_relationships) == 0)
+      {addRequiredRelationship($outfile_index,
+			       $infile_index,
+			       getRelationStr('1:1orM'))}
+
+    my $default_suffix =
+      $outfile_suffix_array->[$infile_index]->[$suffix_index];
+
+    #Grab all the usage info for the outfile and suffix options
+    my $of_usage     = getFileUsageHash($outfile_index,'outfile');
+    my $ofsuff_usage = getFileUsageHash($outfile_id,   'suffix');
+    my $sf_usage     = getFileUsageHash($suffix_id,    'suffix');
+
+    #Set $primary from the file IDs
+    debug({LEVEL => -2},"Arbitrarily setting PRIMARY to the value from ",
+	  "the ",($outf_explicit ? 'outfile' : 'suffix')," option.");
+    #Suffix's primary value is the default
+    my $primary = ($outf_explicit ? $of_usage->{PRIMARY} :
+		   ($suff_explicit ? $sf_usage->{PRIMARY} : 1));
+
+    #Make sure PRIMARY agrees with the options supplied
+    if($of_usage->{PRIMARY} != $primary)
+      {
+	warning("Tagteam outfile conflict for PRIMARY output settings.  ",
+		"The tagteam output is set as ",($primary ? '' : 'NOT '),
+		"PRIMARY, but ",getOutfileFlag($outfile_index)," is set ",
+		"as ",($of_usage->{PRIMARY} ? '' : 'NOT '),"PRIMARY.")
+	  if($outf_explicit);
+
+	$of_usage->{PRIMARY} = $primary;
+
+	#If the default was automatically set based on $primary
+	if($of_usage->{DEFAULT} eq 'stdout' ||
+	   $of_usage->{DEFAULT} eq 'no output')
+	  {$of_usage->{DEFAULT} = ($primary ? 'stdout' : 'no output')}
+
+	$suffix_primary_vals->[$outfile_index]->[$outfile_suffix_index] =
+	  $primary;
+
+	$ofsuff_usage->{PRIMARY} = $primary;
+      }
+    #This one can be assumed to be the same as the above, but we'll double-
+    #check it if the above matches
+    elsif($ofsuff_usage->{PRIMARY} != $primary)
+      {
+	warning("Tagteam outfile's hidden suffix conflict for PRIMARY ",
+		"output settings.  The tagteam output is set as ",
+		($primary ? '' : 'NOT '),"PRIMARY, but ",
+		getOutfileSuffixFlag($outfile_id)," is set as ",
+		($ofsuff_usage->{PRIMARY} ? '' : 'NOT '),"PRIMARY.")
+	  if($outf_explicit);
+
+	$suffix_primary_vals->[$outfile_index]->[$outfile_suffix_index] =
+	  $primary;
+
+	$ofsuff_usage->{PRIMARY} = $primary;
+      }
+    if($sf_usage->{PRIMARY} != $primary)
+      {
+	warning("Tagteam suffix conflict for PRIMARY output settings.  ",
+		"The tagteam output is set as ",($primary ? '' : 'NOT '),
+		"PRIMARY, but the settings for ",
+		getOutfileSuffixFlag($suffix_id)," is set as ",
+		($sf_usage->{PRIMARY} ? '' : 'NOT '),"PRIMARY.")
+	  if($suff_explicit);
+
+	$suffix_primary_vals->[$infile_index]->[$suffix_index] = $primary;
+
+	$sf_usage->{PRIMARY} = $primary;
+      }
+
+    #Set $primary from the file IDs
+    debug({LEVEL => -2},"Arbitrarily setting REQUIRED to the value ",
+	  ($outf_explicit ? "from the outfile option [$of_usage->{REQUIRED}]" :
+	   ($suff_explicit ? "from the suffix option [$sf_usage->{REQUIRED}]" :
+	    'to 0')),'.');
+    #Suffix's required value is the default
+    my $required = ($outf_explicit ? $of_usage->{REQUIRED} :
+		    ($suff_explicit ? $sf_usage->{REQUIRED} : 0));
+
+    #Check each option's REQUIRED value and issue a warning if either is true
+    if(!$required && $of_usage->{REQUIRED})
+      {
+	warning("Tagteam outfile conflict for REQUIRED output settings.  ",
+		"The tagteam output is set as ",($required ? '' : 'NOT '),
+		"REQUIRED, but ",getOutfileFlag($outfile_index)," is set ",
+		"as ",($of_usage->{REQUIRED} ? '' : 'NOT '),"REQUIRED.")
+	  if($outf_explicit);
+
+	#We will leave the SUMMARY for the usage as-is, since we want required
+	#options (especially if the user added it explicitly as required) to
+	#show in the summary usage
+      }
+    if(!$required && $sf_usage->{REQUIRED})
+      {
+	warning("Tagteam suffix conflict for REQUIRED output settings.  ",
+		"The tagteam output is set as ",($required ? '' : 'NOT '),
+		"REQUIRED, but the settings for ",
+		getOutfileSuffixFlag($suffix_id)," is set as ",
+		($sf_usage->{REQUIRED} ? '' : 'NOT '),"REQUIRED.")
+	  if($suff_explicit);
+
+	#We will leave the SUMMARY for the usage as-is, since we want required
+	#options (especially if the user added it explicitly as required) to
+	#show in the summary usage
+      }
+
+    #Set the options' REQUIRED value to false
+    #Regardless of the value of required for the tagteam, the individual
+    #options will always be set to not be required so that the tagteam
+    #requirement can be enforced without individual required options will not
+    #interfere..
+    if($of_usage->{REQUIRED})
+      {
+	#Remove this type from the required outfile types
+	@$required_outfile_types =
+	  grep {$_ != $outfile_index} @$required_outfile_types;
+      }
+    $of_usage->{REQUIRED} = 0;
+    if($ofsuff_usage->{REQUIRED})
+      {
+	#Remove this type from the required suffix types
+	@$required_suffix_types =
+	  grep {$_->[2] != $outfile_id} @$required_suffix_types;
+      }
+    $ofsuff_usage->{REQUIRED} = 0;
+    if($sf_usage->{REQUIRED})
+      {
+	#Remove this type from the required suffix types
+	@$required_suffix_types =
+	  grep {$_->[2] != $suffix_id} @$required_suffix_types;
+      }
+    $sf_usage->{REQUIRED} = 0;
+
+    #Check whether any options are hidden
+    my $hidden = $of_usage->{HIDDEN} + $sf_usage->{HIDDEN};
+
+    if($required && !$primary && $hidden == 2)
+      {
+	warning("The suffix [",getOutfileSuffixFlag($suffix_id),
+		"] and outfile [",getOutfileFlag($outfile_index),
+		"] options involved a tagteam cannot both be hidden and ",
+		"required unless the output is primary.  Un-hiding.  Please ",
+		"unhide at least one of the two options or change the ",
+		"required state of the tagteam to false/0.",
+		{DETAIL =>
+		 join(',',('If both options that specify where output should ',
+			   'go are required and not primary (note: primary ',
+			   'output goes to STDOUT when no file is ',
+			   'specified), they cannot be hidden from the usage ',
+			   'output because the user has no way to know how ',
+			   'to supply the required option(s).'))});
+	$of_usage->{HIDDEN} = 0;
+	$sf_usage->{HIDDEN} = 0;
+      }
+
+    #Append cross-referenced statements that mention that these options are
+    #mutually exclusive unless one of them is hidden.
+    if($hidden != 1)
+      {
+	$of_usage->{DETAILS} .= ($of_usage->{DETAILS} eq '' ? '' : "\n") .
+	  "Mutually exclusive with " . getOutfileSuffixFlag($suffix_id) .
+	    " (both options specify an outfile name in different ways for " .
+	      "the same output).";
+	$sf_usage->{DETAILS} .= ($sf_usage->{DETAILS} eq '' ? '' : "\n") .
+	  "Mutually exclusive with " . getOutfileFlag($outfile_index) .
+	    " (both options specify an outfile name in different ways for " .
+	      "the same output).";
+
+	if($required)
+	  {
+	    #NOTE: "^" is used in the required column of the usage in this same
+	    #condition to reference the following note about one of the tagteam
+	    #options being required
+	    $of_usage->{DETAILS} .= "\n^ Required if " .
+	      getOutfileSuffixFlag($suffix_id) . " is not supplied.";
+	    $sf_usage->{DETAILS} .= "\n^ Required if " .
+	      getOutfileFlag($outfile_index) . " is not supplied.";
+	  }
+      }
+
+    #We do not want to include a note about 1 of 2 options being required if
+    #the other option is hidden (or rather 1 of the options is hidden).  Note,
+    #both cannot be hidden and required.
+    $of_usage    ->{TTHIDN} = $hidden == 1;
+    $ofsuff_usage->{TTHIDN} = $hidden == 1;
+    $sf_usage    ->{TTHIDN} = $hidden == 1;
+
+    #Mark a flag as to whether it's required as a part of a tagteam for the
+    #usage output
+    $of_usage    ->{TTREQD} = $required;
+    $ofsuff_usage->{TTREQD} = $required;
+    $sf_usage    ->{TTREQD} = $required;
+
+    #Mark these items as being involved in a tagteam, so they can be skipped in
+    #customHelp
+    $of_usage    ->{TAGTEAM} = 1;
+    $ofsuff_usage->{TAGTEAM} = 1;
+    $sf_usage    ->{TAGTEAM} = 1;
+
+    #Save the tagteam ID so that it can be looked up during the processing of
+    #the usage_array hashes
+    $of_usage    ->{TAGTEAMID} = $ttid;
+    $ofsuff_usage->{TAGTEAMID} = $ttid;
+    $sf_usage    ->{TAGTEAMID} = $ttid;
+
+    #These are the hash keys of the hashes in the usage_array that are used in
+    #the customHelp method.  The same keys will be created in the
+    #outfile_tagteams hash: HIDDEN, OPTFLAG, PRIMARY, OPTTYPE, & FORMAT
+    #The options will still appear individually in the usage output (though
+    #they were edited above to do things like append mutual-exclusion cross-
+    #references and required messages).
+    my $flags = ($hidden == 1 && $of_usage->{HIDDEN} ?
+		 '' : $of_usage->{OPTFLAG});
+    $flags =~ s/,\*$//;
+    $flags = ($hidden == 1 && $sf_usage->{HIDDEN} ? '' :
+	      ($flags eq '' ? '' : ',') . $sf_usage->{OPTFLAG});
+    if($primary && $flags !~ /,\*$/)
+      {$flags .= ',*'}
+
+    my $type = (!$hidden ? 'tagteam' : ($of_usage->{HIDDEN} ?
+					'suffix' : 'outfile'));
+
+    my $format = ($outf_explicit && defined($of_usage->{FORMAT}) ?
+		  $of_usage->{FORMAT} :
+		  ($suff_explicit && defined($sf_usage->{FORMAT}) ?
+		   $sf_usage->{FORMAT} : ''));
 
     $outfile_tagteams->{$ttid} = {SUFFID   => $suffix_id,
 				  OUTFID   => $outfile_id,
 				  REQUIRED => $required,
 				  PRIMARY  => $primary,
-				  SUFFDEF  => $default_suffix};
+
+				  #TODO: This is here to allow the teagteam
+				  #code to know whether the user supplied a
+				  #value different from the hard-coded default
+				  #so that it can decide whether to use the
+				  #suffix or the outfile or whether the user
+				  #inappropriately used both mutually exclusive
+				  #flags.  This really should be handled the
+				  #same way the default_outfiles_array is
+				  #handled.  See requirement #289.
+				  SUFFDEF  => $default_suffix,
+
+				  HIDDEN   => $hidden == 2,
+				  OPTFLAG  => $flags,
+				  OPTTYPE  => $type,
+				  FORMAT   => $format};
 
     return($ttid);
+  }
+
+#This sub is intended to be called after user defaults have been processed
+#It updates the SUFFDEF values in the outfile_tagteams hash and clears out any
+#defaults stored in default_infiles_array if the user supplied a default of
+#their own to either the suffix or the outfile.
+##TODO: Do not manipulate the default values like this.  See requirement #289
+##TODO: Save defaults in the usage_array.  See requirement #288
+sub updateTagteamDefaults
+  {
+    foreach my $ttid (keys(%$outfile_tagteams))
+      {
+	#In order to evaluate whether the SUFFID option was supplied a value or
+	#has a default value, we need the 2 indexes into the
+	#outfile_suffix_array to obtain the value to compare to the SUFFDEF
+	#key's value in the outfile_tagteams hash
+	my $suffid_infile_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{SUFFID}]->[0];
+	my $suffid_suffix_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{SUFFID}]->[1];
+	#Same for the OUTFID
+	my $outfid_infile_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{OUTFID}]->[0];
+	my $outfid_suffix_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{OUTFID}]->[1];
+
+	#Retrieve the default values
+	my $suff_default = $outfile_tagteams->{$ttid}->{SUFFDEF};
+	my $outf_default = []; #A 2D array reference
+	if($outfid_infile_index < scalar(@$default_infiles_array) &&
+	   defined($default_infiles_array->[$outfid_infile_index]) &&
+	   scalar(@{$default_infiles_array->[$outfid_infile_index]}) &&
+	   scalar(grep {defined($_)} map {@$_}
+		  @{$default_infiles_array->[$outfid_infile_index]}))
+	  {$outf_default = $default_infiles_array->[$outfid_infile_index]}
+
+	#Retrieve the post-user-default-load values
+	my $suff_value = $outfile_suffix_array->[$suffid_infile_index]
+	  ->[$suffid_suffix_index];
+	my $outf_value = $input_files_array->[$outfid_infile_index];
+
+	my $is_suff_default = (defined($suff_default) &&
+			       $suff_default eq $suff_value);
+	my $is_outf_default =
+	  (defined($outf_value) && scalar(@$outf_value) > 0 &&
+	   defined($outf_default) &&
+	   scalar(@$outf_value) == scalar(@$outf_default) &&
+	   scalar(grep {scalar(@{$outf_value->[$_]}) !=
+			  scalar(@{$outf_default->[$_]})}
+		  (0..$#{$outf_value})) == 0 &&
+	   scalar(grep {my $i=$_;scalar(grep {$outf_value->[$i]->[$_] ne
+						$outf_default->[$i]->[$_]}
+					(0..$#{$outf_value->[$i]}))}
+		  (0..$#{$outf_value})) == 0);
+
+	#If the user saved a default for both mutually exclusive options
+	if(!$is_suff_default && defined($suff_value) &&
+	   !$is_outf_default && defined($outf_value) &&
+	   scalar(@$outf_value) > 0)
+	  {
+	    error("Invalid user defaults saved.  Mutually exclusive options ",
+		  "have been saved in the user defaults.");
+	    quit(-72);
+	  }
+	elsif(!$is_suff_default && defined($suff_value))
+	  {
+	    $outfile_tagteams->{$ttid}->{SUFFDEF} = $suff_value;
+	    $outfile_suffix_array->[$suffid_infile_index]
+	      ->[$suffid_suffix_index] = $suff_value;
+	    debug({LEVEL => -2},"New (user) default suffix: [$suff_value].");
+	    if(defined($outf_default) && scalar(@$outf_default))
+	      {
+		debug({LEVEL => -1},"Clearing out old outfile default.");
+		@{$default_infiles_array->[$outfid_infile_index]} = ();
+	      }
+	  }
+	elsif(!$is_outf_default &&
+	      defined($outf_value) && scalar(@$outf_value) > 0)
+	  {
+	    @{$default_infiles_array->[$outfid_infile_index]} =
+	      @{$input_files_array->[$outfid_infile_index]};
+	    debug({LEVEL => -1},"New (user) default outfiles: [",
+		  join(' ',map {@$_}
+		       @{$default_infiles_array->[$outfid_infile_index]}),
+		  "].");
+	    if(defined($suff_default))
+	      {
+		$outfile_tagteams->{$ttid}->{SUFFDEF} = undef;
+		#The value for the suffix has to be manipulated because the
+		#default is stored in the actual array for the values.
+		$outfile_suffix_array->[$suffid_infile_index]
+		  ->[$suffid_suffix_index] = undef;
+	      }
+	  }
+	else
+	  {debug({LEVEL => -1},"Tagteam [$ttid] doesn't have an option that ",
+		 "was changed by user defaults.")}
+      }
   }
 
 #Takes an outfile type index and returns the suffix IDs associated with it
 sub getSuffixIDs
   {
-    my $outfile_type_index = $_[0];
-    if(!defined($outfile_type_index) ||
-       $outfile_type_index >= scalar(@$input_files_array) ||
-       !exists($outfile_types_hash->{$outfile_type_index}))
+    my $file_type_index = $_[0];
+    if(!defined($file_type_index) ||
+       $file_type_index >= scalar(@$input_files_array))
       {
-	error("Invalid outfile type index: [",
-	      (defined($outfile_type_index) ? $outfile_type_index : 'undef'),
+	error("Invalid file type index: [",
+	      (defined($file_type_index) ? $file_type_index : 'undef'),
 	      "].");
 	return(wantarray ? () : []);
       }
-    my $suffix_ids = [grep {$suffix_id_lookup->[$_]->[0] ==
-			      $outfile_type_index} 0..$#{$suffix_id_lookup}];
+    my $suffix_ids = [grep {$suffix_id_lookup->[$_]->[0] == $file_type_index}
+		      0..$#{$suffix_id_lookup}];
     return(wantarray ? @$suffix_ids : $suffix_ids);
+  }
+
+#Takes an file type index and a suffix index and returns the suffix ID
+
+sub getSuffixID
+  {
+    my $file_type_index = $_[0];
+    my $suffix_index    = $_[1];
+    if(!defined($file_type_index) ||
+       $file_type_index >= scalar(@$input_files_array))
+      {
+	error("Invalid file type index: [",
+	      (defined($file_type_index) ? $file_type_index : 'undef'),
+	      "].");
+	return(undef);
+      }
+    elsif(!defined($suffix_index) ||
+	  $suffix_index >=
+	  scalar(@{$outfile_suffix_array->[$file_type_index]}))
+      {
+	error("Invalid suffix index: [",
+	      (defined($suffix_index) ? $suffix_index : 'undef'),"].");
+	return(undef);
+      }
+    my $suffix_ids = [grep {$suffix_id_lookup->[$_]->[0] == $file_type_index &&
+			      $suffix_id_lookup->[$_]->[1] == $suffix_index}
+		      0..$#{$suffix_id_lookup}];
+    if(scalar(@$suffix_ids) != 1)
+      {
+	error("Unable to determine suffix ID from outfile index ",
+	      "[$file_type_index] and suffix index [$suffix_index] because ",
+	      "it matches [",scalar(@$suffix_ids),"] IDs.");
+	return(undef);
+      }
+    return($suffix_ids->[0]);
   }
 
 #Returns whether any of the submitted subroutine names are in the stack trace
@@ -2010,10 +2548,13 @@ sub addOption
 	$general_flag_hash->{$get_opt_ref} = $flag;
       }
 
-    if(defined($default) && $default ne '' && $detail_desc !~ /^\[/)
-      {$detail_desc = "[$default] " . $detail_desc}
-
     my $genopttype = getGeneralOptType($get_opt_str);
+
+    if(defined($default) && $default ne '' && $detail_desc !~ /^\[/ &&
+       showDefault($default,$genopttype))
+      {$detail_desc = '[' .
+	 ($genopttype eq 'negbool' ? ($default ? 'On' : 'Off') : $default) .
+	   '] ' . $detail_desc}
 
     addToUsage($flags,
 	       $smry_desc,
@@ -2397,13 +2938,17 @@ sub addOptions
 
 	$GetOptHash->{$get_opt_str} = $getopthash->{$get_opt_str};
 
+	my $genopttype = getGeneralOptType($get_opt_str);
+
 	#Let's do what we can...
 	my $default = getDefaultStr($getopthash->{$get_opt_str});
 	my $flags = join(',',getOptStrFlags($get_opt_str));
-	my $desc = (defined($default) && $default ne '' ?
-		    "[$default]" : '[none]') . ' No description supplied.  ' .
-		      'Programmer note: Use addOption() instead of ' .
-			'addOptions(), or use addToUsage() to supply a usage.';
+	my $desc = (showDefault($default,$genopttype) ?
+		    (defined($default) && $default ne '' ?
+		     "[$default] " : '[none] ') : '') . 'No description ' .
+		       'supplied.  Programmer note: Use addOption() instead ' .
+			 'of addOptions(), or use addToUsage() to supply a ' .
+			   'usage.';
 
 	addToUsage($flags,
 		   undef,
@@ -2484,29 +3029,59 @@ sub addToUsage
 
     my $usage_index = scalar(@$usage_array);
 
-    push(@$usage_array,{OPTFLAG => $flags_str,
-			SUMMARY => (defined($smry_desc) ? $smry_desc : ''),
-			DETAILS => (defined($detail_desc) ? $detail_desc : ''),
-			REQUIRE => (defined($required) ? $required : 0),
-			DEFAULT => $default,
-			ACCEPTS => $accepts,
-		        HIDDEN  => (defined($hidden) ? $hidden : 0),
-			OPTTYPE => $opttype, #bool,negbool,count,scalar,array,
-                                             #infile,outfile,outdir,suffix,unk
+    push(@$usage_array,{OPTFLAG   => $flags_str,
+			SUMMARY   => (defined($smry_desc) ? $smry_desc : ''),
+			DETAILS   => (defined($detail_desc) ? $detail_desc:''),
+			REQUIRED  => (defined($required) ? $required : 0),
+			DEFAULT   => $default,
+			ACCEPTS   => $accepts,
+		        HIDDEN    => (defined($hidden) ? $hidden : 0),
+			OPTTYPE   => $opttype, #bool,negbool,count,scalar,
+                                               #array,infile,outfile,outdir,
+                                               #suffix,unk
 
 			#File option info
-			PRIMARY => $primary, #primary means stdin/out default
-			FORMAT  => $format_desc,
-		        FILEID  => $file_id});
+			PRIMARY   => $primary, #primary means stdin/out default
+			FORMAT    => $format_desc,
+		        FILEID    => $file_id,
+			TAGTEAM   => 0,   #Involved in a tagteam pair
+			TAGTEAMID => '',
+		        TTREQD    => 0,   #Required as a part of a tagteam pair
+		        TTHIDN    => 0}); #& set in createSuffixOutfileTagteam.
+                                          #TTHIDN indicates whether 1 is hidden
 
     return($usage_index);
+  }
+
+#Globals used: $usage_array
+sub getFileUsageHash  {
+    my $file_id = $_[0];
+    my $type    = $_[1];
+    if(scalar(@_) != 2)
+      {
+	error("getFileUsageHash requires exactly 2 parameters: a file ID & a ",
+	      "type.");
+	return({});
+      }
+    my @hashes = grep {exists($_->{FILEID}) && defined($_->{FILEID}) &&
+			 $_->{FILEID} == $file_id && $_->{OPTTYPE} eq $type}
+      @$usage_array;
+    if(scalar(@hashes) == 1)
+      {return($hashes[0])}
+    error("Could not determine usage hash for file ID: [$file_id].");
+    return({});
   }
 
 sub getOptStrFlags
   {
     my $get_opt_str = $_[0];
+    my $genopttype = getGeneralOptType($get_opt_str);
     $get_opt_str =~ s/[=:\!].*$//;
-    return(map {(length($_) > 1 ? '--' : '-') . $_} split(/\|/,$get_opt_str));
+    my @flags =
+      map {(length($_) > 1 ? '--' : '-') . $_} split(/\|/,$get_opt_str);
+    if($genopttype eq 'negbool')
+      {push(@flags,map {"--no-$_"} split(/\|/,$get_opt_str))}
+    return(@flags);
   }
 
 #Returns the first 2 character flag or the first flag if a 2-character flag is
@@ -2616,6 +3191,7 @@ sub getInfile
 
     return(wantarray ? @return_files :
 	   $input_file_sets->[$file_set_num]->[$file_type_id]);
+#    return($input_file_sets->[$file_set_num]->[$file_type_id]);
   }
 
 #Globals used: $suffix_id_lookup
@@ -2812,11 +3388,38 @@ sub getOutfile
 	       #Indexes of the outfile suffixes array
 	       0..$#{$outfile_suffix_array});
 	  }
+	#Else if there are only 2 outfile types and a tagteam exists
+	elsif(scalar(@$suffix_id_lookup) == 2 &&
+	      scalar(keys(%$outfile_tagteams)) == 1)
+	  {
+	    my $ttid = (keys(%$outfile_tagteams))[0];
+	    $suffix_id = tagteamToSuffixID($ttid);
+	  }
 	else
 	  {
 	    error("Suffix ID is required when there is more than one output ",
-		  "file type (e.g. outfiles defined by suffix or by file ",
-		  "name).");
+		  "file type defined & supplied on the command line.",
+		  {DETAIL =>
+		   join('',("E.g. Outfiles can be defined by supplying an ",
+			    "extension/suffix appended to an input file, by ",
+			    "file name, or (in the absence of output flags) ",
+			    "by the fact that an options is 'primary', in ",
+			    "which case output defaults to STDOUT when not ",
+			    "defined on the command line.  There are [",
+			    scalar(grep {defined($output_file_sets
+						 ->[$file_set_num]->[$_->[0]]
+						 ->[$_->[1]])}
+				   @$suffix_id_lookup),"] output ",
+			    "file types that have either been defined and ",
+			    "supplied on the command line or which are ",
+			    "primary (and will go to STDOUT when not ",
+			    "supplied on the command line) with values [",
+			    join(',',map {$output_file_sets->[$file_set_num]
+					    ->[$_->[0]]->[$_->[1]]}
+				 grep {defined($output_file_sets
+					       ->[$file_set_num]->[$_->[0]]
+					       ->[$_->[1]])}
+				 @$suffix_id_lookup),"]."))});
 	    return(undef);
 	  }
       }
@@ -2862,11 +3465,22 @@ sub tagteamToSuffixID
   {
     my $ttid = $_[0];
 
+    if(!defined($ttid))
+      {
+	if(scalar(keys(%$outfile_tagteams)) == 1)
+	  {$ttid = (keys(%$outfile_tagteams))[0]}
+	else
+	  {
+	    error("Invalid tagteam ID: [undef].");
+	    return(undef);
+	  }
+      }
+
     if(!validateTagteam($ttid)) #Generates errors if invalid
       {return($ttid)}
 
-    if(exists($tagteam_to_suffix_hash->{$ttid}))
-      {return($tagteam_to_suffix_hash->{$ttid})}
+    if(exists($tagteam_to_supplied_oid->{$ttid}))
+      {return($tagteam_to_supplied_oid->{$ttid})}
     else
       {
 	error("Tagteam ID: [$ttid] not found.");
@@ -2874,8 +3488,61 @@ sub tagteamToSuffixID
       }
   }
 
-#This not only validates tagteams, but also populates the
-#tagteam_to_suffix_hash that is used by tagteamToSuffixID
+#Determines if the suffix of a tagteam partner is defined.  Takes a file index
+#and suffix index of the suffix whose partner we want to look up.
+#Globals used: $outfile_suffix_array, $outfile_tagteams, $suffix_id_lookup
+sub isTagteamPartnerDefined
+  {
+    my $file_index = $_[0];
+    my $suff_index = $_[1];
+    my $suffix_id  = getSuffixID($file_index,$suff_index);
+
+    #Find the hash containing the suffix ID.  (NOTE: A suffix can only be
+    #involed in one tagteam.)
+    my $tthashes = [grep {$_->{SUFFID} == $suffix_id ||
+			    $_->{OUTFID} == $suffix_id}
+		    values(%$outfile_tagteams)];
+    if(scalar(@$tthashes) == 0)
+      {
+	#Suffix is not in a tagteam.  It doesn't have a partner, so it can't be
+	#defined
+	return(0);
+      }
+    elsif(scalar(@$tthashes) > 1)
+      {
+	error("INTERNAL ERROR: Multiple matching tagteams found for suffix ",
+	      "ID: [$suffix_id].");
+	quit(-71);
+      }
+    my $tthash = $tthashes->[0];
+    my $is_partner_outf = ($tthash->{SUFFID} == $suffix_id ? 1 : 0);
+    my($partner_defined);
+    my $partner_suffix_id = ($tthash->{SUFFID} == $suffix_id ?
+			     $tthash->{OUTFID} : $tthash->{SUFFID});
+    my $partner_file_index = $suffix_id_lookup->[$partner_suffix_id]->[0];
+    my $partner_suff_index = $suffix_id_lookup->[$partner_suffix_id]->[1];
+    if($is_partner_outf)
+      {
+	#Return true if there's anything in this outfile type's input files
+	#array
+	$partner_defined =
+	  scalar(grep {my $a=$_;defined($a) && scalar(grep {defined($_)} @$a)}
+		 @{$input_files_array->[$partner_file_index]});
+      }
+    else
+      {$partner_defined = defined($outfile_suffix_array->[$partner_file_index]
+				  ->[$partner_suff_index])}
+    debug({LEVEL => -1},"Partner is: [",
+	  ($partner_defined ?
+	   $outfile_suffix_array->[$partner_file_index]->[$partner_suff_index]
+	   : 'undef'),"].  Returning [$partner_defined].");
+    return($partner_defined);
+  }
+
+#This not only validates tagteams by checking that the supplied ID is present
+#and by making sure the options that were made into a tagteam are compatible
+#(taking default-added options into account), but also populates the
+#tagteam_to_supplied_oid that is used by tagteamToSuffixID
 sub validateTagteam
   {
     ##TODO: Enhance this method to take user-supplied defaults into account.
@@ -2897,7 +3564,7 @@ sub validateTagteam
       }
 
     #If already validated
-    if(exists($tagteam_to_suffix_hash->{$ttid}))
+    if(exists($tagteam_to_supplied_oid->{$ttid}))
       {return(1)}
 
     if(scalar(@$suffix_id_lookup) <= $outfile_tagteams->{$ttid}->{SUFFID})
@@ -2968,7 +3635,7 @@ sub validateTagteam
        (!defined($outf_value) || scalar(@$outf_value) == 0 ||
 	$is_outf_default))
       {
-	$tagteam_to_suffix_hash->{$ttid} =
+	$tagteam_to_supplied_oid->{$ttid} =
 	  $outfile_tagteams->{$ttid}->{SUFFID};
 	return(1);
       }
@@ -2977,7 +3644,7 @@ sub validateTagteam
     elsif(defined($outf_value) && scalar(@$outf_value) && !$is_outf_default &&
 	  (!defined($suff_value) || $is_suff_default))
       {
-	$tagteam_to_suffix_hash->{$ttid} =
+	$tagteam_to_supplied_oid->{$ttid} =
 	  $outfile_tagteams->{$ttid}->{OUTFID};
 	return(1);
       }
@@ -2996,7 +3663,7 @@ sub validateTagteam
 	       getOutfileFlag($suffid_infile_index)),
 	      "] and ignore the other option.");
 	quit(-67);
-	$tagteam_to_suffix_hash->{$ttid} =
+	$tagteam_to_supplied_oid->{$ttid} =
 	  ($outfile_tagteams->{$ttid}->{SUFFID} <
 	   $outfile_tagteams->{$ttid}->{OUTFID} ?
 	   $outfile_tagteams->{$ttid}->{SUFFID} :
@@ -3006,14 +3673,14 @@ sub validateTagteam
     #Else if only the suffix has a defined default value
     elsif($is_suff_default && !$is_outf_default)
       {
-	$tagteam_to_suffix_hash->{$ttid} =
+	$tagteam_to_supplied_oid->{$ttid} =
 	  $outfile_tagteams->{$ttid}->{SUFFID};
 	return(1);
       }
     #Else if only the outfile has a defined default value
     elsif($is_outf_default && !$is_suff_default)
       {
-	$tagteam_to_suffix_hash->{$ttid} =
+	$tagteam_to_supplied_oid->{$ttid} =
 	  $outfile_tagteams->{$ttid}->{OUTFID};
 	return(1);
       }
@@ -3025,8 +3692,8 @@ sub validateTagteam
 	      "] (default: [",
 	      (defined($suff_default) ? $suff_default : 'undef'),
 	      "]) and an outfile flag [",getOutfileFlag($outfid_infile_index),
-	      "] (default: [",join(',',@$outf_default),
-	      "]) at the same time.  They are mutually exclusive options.  ",
+	      "] (default: [(",join('),(',map {join(',',@$_)} @$outf_default),
+	      ")]) at the same time.  They are mutually exclusive options.  ",
 	      "Use --force to surpass this fatal error and arbitrarily use [",
 	      ($outfile_tagteams->{$ttid}->{SUFFID} <
 	       $outfile_tagteams->{$ttid}->{OUTFID} ?
@@ -3034,7 +3701,7 @@ sub validateTagteam
 	       getOutfileFlag($suffid_infile_index)),
 	      "] and ignore the other option.");
 	quit(-999);
-	$tagteam_to_suffix_hash->{$ttid} =
+	$tagteam_to_supplied_oid->{$ttid} =
 	  ($outfile_tagteams->{$ttid}->{SUFFID} <
 	   $outfile_tagteams->{$ttid}->{OUTFID} ?
 	   $outfile_tagteams->{$ttid}->{SUFFID} :
@@ -3048,21 +3715,125 @@ sub validateTagteam
 
     #Else if only the suffix was default added
     elsif($default_outfile_suffix_added && !$default_outfile_added)
-      {$tagteam_to_suffix_hash->{$ttid} =
+      {$tagteam_to_supplied_oid->{$ttid} =
 	 $outfile_tagteams->{$ttid}->{OUTFID}}
     #Else if the outfile only was default added
     elsif($default_outfile_added && !$default_outfile_suffix_added)
-      {$tagteam_to_suffix_hash->{$ttid} =
+      {$tagteam_to_supplied_oid->{$ttid} =
 	 $outfile_tagteams->{$ttid}->{SUFFID}}
     #Else both or neither were default added - return the lesser ID
     else
-      {$tagteam_to_suffix_hash->{$ttid} =
+      {$tagteam_to_supplied_oid->{$ttid} =
 	 ($outfile_tagteams->{$ttid}->{SUFFID} <
 	  $outfile_tagteams->{$ttid}->{OUTFID} ?
 	  $outfile_tagteams->{$ttid}->{SUFFID} :
 	  $outfile_tagteams->{$ttid}->{OUTFID})}
 
     return(1);
+  }
+
+#Returns any required tagteam deficiencies, but also quits if 2 mutually
+#exclusive tagteam options are supplied.
+sub getMissingConflictingTagteamFlags
+  {
+    my $missing_flag_combos = [];
+    my $conflicting_flags = [];
+
+    #For every required tagteam
+    foreach my $ttid (keys(%$outfile_tagteams))
+      {
+	my $outfile_id = $outfile_tagteams->{$ttid}->{OUTFID};
+	my $outfile_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{OUTFID}]->[0];
+	my $suffix_id  = $outfile_tagteams->{$ttid}->{SUFFID};
+	my $infile_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{SUFFID}]->[0];
+	my $suffix_index =
+	  $suffix_id_lookup->[$outfile_tagteams->{$ttid}->{SUFFID}]->[1];
+	my $oflag = getOutfileFlag($outfile_index);
+	my $sflag = getOutfileSuffixFlag($suffix_id);
+
+	#Determine whether the the value of the outfiles is the default or was
+	#supplied by the user
+	##TODO: This is similar to #281, but here, the values from the
+	#command line have already been read in and the default values assigned
+	#to the array.  So here, the fact that an outfile has been supplied or
+	#not has been lost.  What should really happen is that whether a value
+	#has been supplied on the command line or not should be saved.  I
+	#should really be creating option IDs and storing stuff like this in an
+	#option structure (an expansion of the usage_array, really).  See
+	#requirement #288.
+	my $outf_default = []; #A 2D array reference
+	if($outfile_index < scalar(@$default_infiles_array) &&
+	   defined($default_infiles_array->[$outfile_index]) &&
+	   scalar(@{$default_infiles_array->[$outfile_index]}) &&
+	   scalar(grep {defined($_)} map {@$_}
+		  @{$default_infiles_array->[$outfile_index]}))
+	  {$outf_default = $default_infiles_array->[$outfile_index]}
+	my $outf_value = $input_files_array->[$outfile_index];
+	my $is_outf_default =
+	  (defined($outf_value) && defined($outf_default) &&
+	   scalar(@$outf_value) > 0 &&
+	   scalar(@$outf_value) == scalar(@$outf_default) &&
+	   scalar(grep {scalar(@{$outf_value->[$_]}) !=
+			  scalar(@{$outf_default->[$_]})}
+		  (0..$#{$outf_value})) == 0 &&
+	   scalar(grep {my $i=$_;scalar(grep {$outf_value->[$i]->[$_] ne
+						$outf_default->[$i]->[$_]}
+					(0..$#{$outf_value->[$i]}))}
+		  (0..$#{$outf_value})) == 0);
+	my $outfile_supplied = (defined($outf_value) &&
+				scalar(@$outf_value) > 0 &&
+				!$is_outf_default ? 1 : 0);
+	my $outfile_hasdef = defined($outf_default) && scalar(@$outf_default);
+
+	#The outer and inner arrays are guaranteed/assumed to be there
+	my $suffix_supplied = (defined($outfile_suffix_array->[$infile_index]
+				       ->[$suffix_index]) &&
+			       (!defined($outfile_tagteams->{$ttid}
+					 ->{SUFFDEF}) ||
+				(defined($outfile_tagteams->{$ttid}
+					 ->{SUFFDEF}) &&
+				 $outfile_suffix_array->[$infile_index]
+				 ->[$suffix_index] ne
+				 $outfile_tagteams->{$ttid}->{SUFFDEF}))) ?
+				   1 : 0;
+	my $suffix_hasdef =
+	  defined($outfile_tagteams->{$ttid}->{SUFFDEF}) ? 1 : 0;
+
+	debug({LEVEL => -2},"TTID: [$ttid] Required?: ",
+	      "[$outfile_tagteams->{$ttid}->{REQUIRED}] Outfile has ",
+	      "default?: [$outfile_hasdef] Supplied?: [$outfile_supplied] ",
+	      "Suffix has default?: [$suffix_hasdef] Supplied?: ",
+	      "[$suffix_supplied]");
+
+	if($outfile_tagteams->{$ttid}->{REQUIRED} &&
+	   !$outfile_tagteams->{$ttid}->{PRIMARY} &&
+	   !$outfile_supplied && !$suffix_supplied && !$suffix_hasdef &&
+	   !$outfile_hasdef
+	   #TODO: Do a version of this if/when requirement 11b is implemented
+	   #&& ($req_type != $primary_outfile_type ||
+	   #    isStandardOutputToTerminal())
+	  )
+	  {push(@$missing_flag_combos,
+		(defined($oflag) && $oflag ne '' &&
+		 defined($sflag) && $sflag ne '' ?
+		 "$oflag or $sflag" : 'internal error'))}
+	elsif($outfile_supplied && $suffix_supplied)
+	  {push(@$conflicting_flags,
+		(defined($oflag) && $oflag ne '' &&
+		 defined($sflag) && $sflag ne '' ?
+		 "($sflag " .
+		 "$outfile_suffix_array->[$infile_index]->[$suffix_index]) " .
+		 "and ($oflag '" .
+		 substr(join("' $oflag '",
+			     map {join(' ',@$_)}
+			     @{$input_files_array->[$outfile_index]}),0,20) .
+		 "...')" :
+		 'internal error'))}
+      }
+
+    return($missing_flag_combos,$conflicting_flags);
   }
 
 sub nextFileCombo
@@ -3206,8 +3977,11 @@ sub addDefaultFileOptions
 	if($default_outfile_added)
 	  {$def_outf_suff_id = (getSuffixIDs($default_outfile_id))[0]}
 	if($default_outfile_added && $default_outfile_suffix_added)
-	  {createOutfileTagteam($default_outfile_suffix_id,
-			        $def_outf_suff_id,0,1)}
+	  {
+	    if(!$default_tagteam_added)
+	      {createSuffixOutfileTagteam($default_outfile_suffix_id,
+					  $def_outf_suff_id)}
+	  }
 	elsif($default_outfile_suffix_added)
 	  {
 	    my $prim_outf_usg_hash = getFirstPrimaryOutUsageHash(0);
@@ -3224,18 +3998,14 @@ sub addDefaultFileOptions
 	    if(scalar(@$outf_ids) > 1)
 	      {warning("Unexpected number of suffix IDs associated with ",
 		       "outfile type: [$prim_outf_usg_hash->{FILEID}].")}
-	    createOutfileTagteam($default_outfile_suffix_id,
-				 $outf_id,
-				 $prim_outf_usg_hash->{REQUIRE},
-				 $prim_outf_usg_hash->{PRIMARY});
+	    createSuffixOutfileTagteam($default_outfile_suffix_id,
+				       $outf_id);
 	  }
 	elsif($default_outfile_added)
 	  {
 	    my $prim_suff_usg_hash = getFirstPrimaryOutUsageHash(1);
-	    createOutfileTagteam($prim_suff_usg_hash->{FILEID},
-				 $def_outf_suff_id,
-				 $prim_suff_usg_hash->{REQUIRE},
-				 $prim_suff_usg_hash->{PRIMARY});
+	    createSuffixOutfileTagteam($prim_suff_usg_hash->{FILEID},
+				       $def_outf_suff_id);
 	  }
       }
 
@@ -3251,7 +4021,7 @@ sub getFirstPrimaryOutUsageHash
       #Primary options first. Of primary options, required first. Of primary-
       #required options, unhidden first.  The first primary required unhidden
       #option will ne returned
-      $b->{PRIMARY} <=> $a->{PRIMARY} || $b->{REQUIRE} <=> $a->{REQUIRE} ||
+      $b->{PRIMARY} <=> $a->{PRIMARY} || $b->{REQUIRED} <=> $a->{REQUIRED} ||
 	$a->{HIDDEN} <=> $b->{HIDDEN}}
 			    grep {$get_suffix ? ($_->{OPTTYPE} eq 'suffix') :
 				    ($_->{OPTTYPE} eq 'outfile')}
@@ -3369,10 +4139,12 @@ sub addRunModeOptions
 		  GETOPTVAL   => \$explicit_help,
 		  REQUIRED    => 0,
 		  HIDDEN      => $help_hidden,
-		  SMRY_DESC   => ($help &&
+		  SMRY_DESC   => ($default_run_mode eq 'help' && $help &&
 				  defined($help_smry) && $help_smry ne '' ?
-				  '[1] ' : '') . $help_smry,
-		  DETAIL_DESC => '[1] ' . $help_desc);
+				  '[On] ' : '') . $help_smry,
+		  DETAIL_DESC => (($default_run_mode eq 'help' ?
+				   '[On] ' : '') .
+				  $help_desc));
 
 	#Add --run as a hidden optional opt using addOption
 	addOption(GETOPTKEY   => 'run',
@@ -3401,8 +4173,8 @@ sub addRunModeOptions
 		      HIDDEN      => 1,
 		      SMRY_DESC   => ($run &&
 				      defined($run_smry) && $run_smry ne '' ?
-				      '[1] ' : '') . $run_smry,
-		      DETAIL_DESC => '[1] ' . $run_desc);
+				      '[On] ' : '') . $run_smry,
+		      DETAIL_DESC => '[On] ' . $run_desc);
 
 	    #Add --dry-run as a shown optional opt using addOption
 	    addOption(GETOPTKEY   => 'dry-run',
@@ -3429,9 +4201,9 @@ sub addRunModeOptions
 		      HIDDEN      => 1,
 		      SMRY_DESC   => ($dry_run &&
 				      (defined($dry_run_smry) &&
-				       $dry_run_smry ne '' ? '[1] ' : '') .
+				       $dry_run_smry ne '' ? '[On] ' : '') .
 				      $dry_run_smry),
-		      DETAIL_DESC => '[1] ' . $dry_run_desc);
+		      DETAIL_DESC => '[On] ' . $dry_run_desc);
 	  }
 	else
 	  {
@@ -3468,9 +4240,9 @@ sub addRunModeOptions
 		      REQUIRED    => 0,
 		      HIDDEN      => 1,
 		      SMRY_DESC   => (($help && defined($help_smry) &&
-				       $help_smry ne '' ? '[1] ' : '') .
+				       $help_smry ne '' ? '[On] ' : '') .
 				      $help_smry),
-		      DETAIL_DESC => '[1] ' . $help_desc);
+		      DETAIL_DESC => '[On] ' . $help_desc);
 	  }
 	elsif($default_run_mode eq 'usage')
 	  {
@@ -3480,7 +4252,7 @@ sub addRunModeOptions
 		      REQUIRED    => 0,
 		      HIDDEN      => 1,
 		      SMRY_DESC   => (($usage && defined($usage_smry) &&
-				       $usage_smry ne '' ? '[1] ' : '') .
+				       $usage_smry ne '' ? '[On] ' : '') .
 				      $usage_smry),
 		      DETAIL_DESC => $usage_desc);
 
@@ -3499,8 +4271,9 @@ sub addRunModeOptions
 		      GETOPTVAL   => \$explicit_usage,
 		      REQUIRED    => 0,
 		      HIDDEN      => 0,
-		      SMRY_DESC   => (($usage && defined($usage_smry) &&
-				       $usage_smry ne '' ? '[1] ' : '') .
+		      SMRY_DESC   => (($default_run_mode eq 'usage' &&
+				       $usage && defined($usage_smry) &&
+				       $usage_smry ne '' ? '[On] ' : '') .
 				      $usage_smry),
 		      DETAIL_DESC => $usage_desc);
 
@@ -3957,10 +4730,15 @@ sub loadUserDefaults
     if(scalar(@user_defaults) == 0)
       {return(0)}
 
+    debug({LEVEL => -1},"Loading user defaults: [",join(' ',@user_defaults),
+	  "].");
+
     #Set user-saved defaults
     GetOptionsFromArray([@user_defaults],%$GetOptHash);
 
     setDefaultRunMode();
+
+    updateTagteamDefaults();
 
     debug({LEVEL => -1},"Default run mode after user: [$default_run_mode]");
 
@@ -4242,15 +5020,19 @@ sub processCommandLine
 
     #Make sure that the tagteams' suffix and outfile options' mutual
     #exclusivity is enforced.  This also records which option was supplied on
-    #the command line in tagteam_to_suffix_hash
+    #the command line in tagteam_to_supplied_oid
     foreach my $ttkey (keys(%$outfile_tagteams))
       {validateTagteam($ttkey)}
+
+    #This makes sure that required tagteams had 1 of their 2 linked options
+    #supplied
+    my($missing_flags,$conflicting_flags) =
+      getMissingConflictingTagteamFlags();
+    my $requirement_defficiency = scalar(@$missing_flags);
 
     debug({LEVEL => -1},"Checking [",scalar(@$required_infile_types),
 	  "] required input file types");
 
-    my $requirement_defficiency = 0;
-    my $missing_flags           = [];
     foreach my $req_type (@$required_infile_types)
       {
 	if(getNumInfileTypes() == 0 ||
@@ -4364,9 +5146,23 @@ sub processCommandLine
        }
 
     #Require input file(s)
-    if($requirement_defficiency)
+    if($requirement_defficiency || scalar(@$conflicting_flags))
       {
-	error('Missing required options: [',join(',',@$missing_flags),'].');
+	if(scalar(@$conflicting_flags))
+	  {error("The following pairs of options are mutually exclusive: [",
+		 join(',',@$conflicting_flags),"].",
+		 {DETAIL =>
+		  join('These pairs of flags each specify a different way of ',
+		       'naming output files for the same output.  You can ',
+		       'either specify an output file using a suffix/',
+		       'extension to be appended to an input file name or ',
+		       'you can supply a full filename, but not both at the ',
+		       'same time.')});
+	 }
+
+	if($requirement_defficiency)
+	  {error('Missing required options: [',join(',',@$missing_flags),'].')}
+
 	usage(1);
 	quit(-17,0);
 	return(-17) if($cleanup_mode);
@@ -4397,7 +5193,10 @@ sub processCommandLine
     #processed the command line options, that the user is not using this module
     #for file processing, so return
     if($cleanup_mode && scalar(grep {scalar(@$_)} @$input_files_array) == 0)
-      {return(0)}
+      {
+	$command_line_processed = 2;
+	return(0);
+      }
 
     ($input_file_sets,  #getFileSets(3DinfileArray,2DsuffixArray,2DoutdirArray)
      $output_file_sets) = getFileSets($input_files_array,
@@ -4418,6 +5217,8 @@ sub processCommandLine
 
     #Really done with command line processing
     $command_line_processed = 2;
+
+    return(0);
   }
 
 sub loadDefaultFiles
@@ -6490,9 +7291,15 @@ sub quit
 	#generated (if deemed necessary later)
 	if($errno == 0 && !$processCommandLine_called)
 	  {
+	    debug({LEVEL => -1},
+		  "Calling processCommandLine during successful quit.");
+
 	    #Set the error code to whatever processCommandLine returns, in case
 	    #a fatal error occurs
 	    $errno = processCommandLine();
+
+	    debug({LEVEL => -1},
+		  "quit: processCommandLine returned [$errno].");
 	  }
 	#Fail-safe to determine whether to flush the buffer - It is inferred
 	#that something went wrong in processing the default options or before
@@ -6500,14 +7307,14 @@ sub quit
 	#was called yet the command line wasn't processed.
 	elsif(!$command_line_processed)
 	  {
+	    debug({LEVEL => -1},"Calling getOptions during successful quit.");
+
 	    getOptions($explicit_quit && (!defined($force) || !$force));
 
 	    #In this instance, we have not run the programmer's code, so
 	    #there's really no need for a run report
 	    $report = 0;
 	  }
-	elsif($command_line_processed == 1)
-	  {$report = 0}
 
 	#Re-check the same exit conditions as were checked to get in here, just
 	#in case an error occurred during command line processing in the first
@@ -6515,7 +7322,8 @@ sub quit
 	if($errno == 0 || !defined($force) || !$force ||
 	   (defined($force) && $force && $errno == -1))
 	  {
-	    debug({LEVEL => -1},"Exit status: [$errno].");
+	    debug({LEVEL => -1},"Exit status: [$errno].  Report: [",
+		  (defined($report) ? $report : 'undef'),"].");
 
 	    printRunReport($errno) if(!defined($report) || $report);
 
@@ -6532,6 +7340,8 @@ sub quit
       }
 
     $forced_past = 1;
+
+    debug({LEVEL => -1},"quit returning.");
 
     return(1);
   }
@@ -6552,12 +7362,17 @@ sub printRunReport
     my $global_quiet   = defined($quiet)   ? $quiet   : 0;
     my $global_debug   = defined($DEBUG)   ? $DEBUG   : 0;
 
-    #Return if quiet or there's nothing to report
+    #Return if quiet or there's nothing to report (or there's something to
+    #report, but the programmer's code never ran, so all the user sees is the
+    #error (i.e. $command_line_processed == 1))
     return(0) if($global_quiet || (!$global_verbose &&
 				   !$global_debug &&
-				   !defined($error_number) &&
+				   (!defined($error_number) ||
+				    $command_line_processed == 1) &&
 				   !defined($warning_number) &&
-				   (!defined($errno) || $errno == 0)));
+				   #We are exiting with success status
+				   (!defined($errno) || $errno == 0 ||
+				    $command_line_processed == 1)));
 
     #Before printing a message saying to scroll up for error details, force-
     #flush the stderr buffer
@@ -8120,7 +8935,8 @@ sub openOut
     my($select);
 
     debug({LEVEL => -1},"Collision mode: [",getCollisionMode($output_file),
-	  "] for file: [$output_file] Resulting merge mode: [$merge_mode].");
+	  "] for file: [",(defined($output_file) ? $output_file : 'undef'),
+	  "] Resulting merge mode: [$merge_mode].");
 
     if(!defined($output_file))
       {
@@ -8730,8 +9546,8 @@ sub getUserDefaults
 
     if(open(DFLTS,$defaults_file))
       {
-	@$return_array = map {chomp;if($remove_quotes){s/^['"]//;s/["']$//}$_}
-	  <DFLTS>;
+	@$return_array = map {chomp;if($remove_quotes){s/^['"]//;s/["']$//}
+			      sglob($_)} <DFLTS>;
 	close(DFLTS);
       }
     elsif(-e $defaults_file)
@@ -9193,14 +10009,20 @@ sub makeCheckOutputs
 		    foreach my $suff_index (0..$#{$suffixes->[$type_index]})
 		      {
 			my $suffix = $suffixes->[$type_index]->[$suff_index];
+			my $partner_defined =
+			  isTagteamPartnerDefined($type_index,$suff_index);
+			#Don't add standard out if a suffix has been defined
+			#for either this outfile type or of a possible tagteam
+			#partner outfile type
 			if(!defined($suffix) &&
-			   !isTypeSuffixPrimary($type_index,$suff_index))
+			   ($partner_defined ||
+			    !isTypeSuffixPrimary($type_index,$suff_index)))
 			  {
 			    push(@{$outfiles_sets->[-1]->[$type_index]},undef);
 			    $cnt++;
 			    next;
 			  }
-			elsif(!defined($suffix) &&
+			elsif(!defined($suffix) && !$partner_defined &&
 			      isTypeSuffixPrimary($type_index,$suff_index))
 			  {
 			    #When no suffix is supplied, yet the output type is
@@ -9970,6 +10792,10 @@ sub processDefaultOptions
     if($use_as_default)
       {
 	saveUserDefaults() && quit(0);
+
+	#Really done with command line processing
+	$command_line_processed = 2;
+
 	quit(-61);
       }
 
@@ -9981,6 +10807,9 @@ sub processDefaultOptions
       {
 	usage(0);
 	debug({LEVEL => -1},"Quitting with usage.");
+
+	#Really done with command line processing
+	$command_line_processed = 2;
 
 	#Return if quit was not forced, which means we were probably called
 	#from the END block
@@ -10018,6 +10847,10 @@ sub processDefaultOptions
     if($version)
       {
 	print(getVersion(),"\n");
+
+	#Really done with command line processing
+	$command_line_processed = 2;
+
 	quit(0);
       }
 
@@ -10025,6 +10858,10 @@ sub processDefaultOptions
     if($help)
       {
 	help($extended);
+
+	#Really done with command line processing
+	$command_line_processed = 2;
+
 	quit(0);
       }
 
@@ -10749,25 +11586,35 @@ sub customUsage
 
     my($flags_remainder,$short_desc_remainder,$long_desc_remainder);
     foreach my $usage_hash (grep {!$_->{HIDDEN}}
-			    sort {$b->{REQUIRE} <=> $a->{REQUIRE} ||
-				    ($b->{OPTFLAG} eq $combo_flag) <=>
-				      ($a->{OPTFLAG} eq $combo_flag) ||
-					$pos_hash->{$a} <=> $pos_hash->{$b}}
+			    sort {($b->{REQUIRED} || $b->{TTREQD}) <=>
+				    ($a->{REQUIRED} || $a->{TTREQD}) ||
+				      ($b->{OPTFLAG} eq $combo_flag) <=>
+					($a->{OPTFLAG} eq $combo_flag) ||
+					  $pos_hash->{$a} <=> $pos_hash->{$b}}
 			    @$usage_array)
       {
 	my $flags      = $usage_hash->{OPTFLAG};
 	my $short_desc = $usage_hash->{SUMMARY};
 	my $long_desc  = $usage_hash->{DETAILS};
 	my $default    = (defined($usage_hash->{DEFAULT}) &&
-			  $usage_hash->{DEFAULT} ne '' ?
+			  $usage_hash->{DEFAULT} ne '' &&
+			  showDefault($usage_hash->{DEFAULT},
+				      $usage_hash->{OPTTYPE}) ?
 			  "[$usage_hash->{DEFAULT}]" : '');
 	my $accepts    = (defined($usage_hash->{ACCEPTS}) &&
 			  $usage_hash->{ACCEPTS} ne '' ?
 			  '{' . join(', ',@{$usage_hash->{ACCEPTS}}) . '}' :
 			  '');
-	my $required   = (exists($usage_hash->{REQUIRE}) &&
-			  defined($usage_hash->{REQUIRE}) &&
-			  $usage_hash->{REQUIRE} ? 'REQUIRED' : 'OPTIONAL');
+	my $required   = (#The option is required OR
+			  (exists($usage_hash->{REQUIRED}) &&
+			   defined($usage_hash->{REQUIRED}) &&
+			   $usage_hash->{REQUIRED}) ||
+			  #1 of 2 tagteam options is required and 1 is hidden
+			  ($usage_hash->{TTREQD} && $usage_hash->{TTHIDN}) ?
+			  'REQUIRED' :
+			  (#1 of 2 options is required and 0 or 2 are hidden
+			   $usage_hash->{TTREQD} && !$usage_hash->{TTHIDN} ?
+			   'REQUIRD^' : 'OPTIONAL'));
 
 	#Add the accepts string if it's defined and not already manually added
 	#to the short description
@@ -10845,6 +11692,23 @@ sub customUsage
     return($short,$long);
   }
 
+sub showDefault
+  {
+    my $default = $_[0];
+    my $type    = $_[1];
+
+    if($type ne 'bool' && $type ne 'negbool' && $type ne 'count')
+      {return(1)}
+    elsif($type eq 'bool')    #Never show the default of a boolean
+      {return(0)}
+    elsif($type eq 'negbool') #Only show a negatable boolean's def if it's true
+      {return(defined($default) && $default != 0)}
+    elsif($type eq 'count')   #Only show a count's def if it's non-0
+      {return(defined($default) && $default != 0)}
+
+    return(1);
+  }
+
 #Globals used: $help_summary, $advanced_help, $extended
 sub customHelp
   {
@@ -10868,7 +11732,8 @@ sub customHelp
     if($local_extended && defined($advanced_help) && $advanced_help ne '')
       {$out .= alignHelpCols('* DETAILS:',$advanced_help)}
 
-    my($flags_remainder,$short_desc_remainder,$long_desc_remainder);
+    #For each input file type that is not hidden or is primary (of which there
+    #can be only 1, BTW)
     foreach my $usage_hash (grep {$_->{OPTTYPE} eq 'infile' &&
 				    (!$_->{HIDDEN} || $_->{PRIMARY})}
 			    @$usage_array)
@@ -10890,154 +11755,59 @@ sub customHelp
 	$out .= alignHelpCols($flag,$desc);
       }
 
-    #If both default outfile types have been added, then it's assumed there are
-    #only 2 outfile types.  Pick one arbitrarily and combine the flags.
-    if($default_outfile_added && $default_outfile_suffix_added)
-      {
-	my $outfile_usage_hash =
-	  (grep {$_->{OPTTYPE} eq 'outfile'} @$usage_array)[0];
-	my $suffix_usage_hash =
-	  (grep {$_->{OPTTYPE} eq 'suffix'} @$usage_array)[0];
-	my $flag = '* ';
-	#The default suffix option can be hidden if the input file it's linked
-	#to is hidden, but the output file option is still there, so just omit
-	#the suffix
-	if($suffix_usage_hash->{HIDDEN} && !$outfile_usage_hash->{HIDDEN})
-	  {$flag .= "OUTPUT FORMAT:\n" . $outfile_usage_hash->{OPTFLAG}}
-	#Else if per chance only the outfile type is hidden (though it's
-	#currently not coded to create this scenario), include only the suffix
-	elsif(!$suffix_usage_hash->{HIDDEN} && $outfile_usage_hash->{HIDDEN})
-	  {$flag .= "OUTPUT FORMAT:\n" . $suffix_usage_hash->{OPTFLAG}}
-	#Else if per chance both are hidden and at least 1 is primary (though
-	#it's currently not coded to create this scenario), change the
-	#description to STDOUT FORMAT
-	elsif($suffix_usage_hash->{HIDDEN} && $outfile_usage_hash->{HIDDEN} &&
-	      ($suffix_usage_hash->{PRIMARY} ||
-	       $outfile_usage_hash->{PRIMARY}))
-	  {$flag .= "STDOUT FORMAT:\n" . $outfile_usage_hash->{OPTFLAG}}
-	#Else if hidden and not primary
-	elsif($suffix_usage_hash->{HIDDEN} && $outfile_usage_hash->{HIDDEN})
-	  {return($out)}
-	else
-	  {$flag .= "OUTPUT FORMAT:\n" . $suffix_usage_hash->{OPTFLAG} . ',' .
-	     $outfile_usage_hash->{OPTFLAG}}
-	my $desc = $suffix_usage_hash->{FORMAT};
+    #Keep track of the tagteam output options that have been processed
+    my $seen_ttids = {};
 
-	my $ignore_empty = 0;
+    #For each output file type that is either part of a tagteam, is not hidden,
+    #or is primary.  (We'll worry about hidden tagteams inside the loop.)
+    foreach my $usage_hash (grep {($_->{OPTTYPE} eq 'outfile' ||
+				   $_->{OPTTYPE} eq 'suffix') &&
+				     ($_->{TAGTEAM} || !$_->{HIDDEN} ||
+				      $_->{PRIMARY})}
+			    @$usage_array)
+      {
+	#If this option is a part of a tagteam
+	if($usage_hash->{TAGTEAM})
+	  {
+	    my $ttid = $usage_hash->{TAGTEAMID};
+
+	    #If this tagteam has already been done, skip it
+	    next if(exists($seen_ttids->{$ttid}));
+	    $seen_ttids->{$ttid}++;
+
+	    #Obtain the usage information from the tagteam hash
+	    $usage_hash = $outfile_tagteams->{$ttid};
+
+	    #The tagteam usage hash has its own hidden value (if both of its
+	    #options are hidden), so we need to check HIDDEN again
+	    next if($usage_hash->{HIDDEN} && !$usage_hash->{PRIMARY});
+	  }
+
+	my $flag = '* ';
+
+	#Create the section title in the header
+	if($usage_hash->{HIDDEN} && $usage_hash->{PRIMARY})
+	  {$flag .= "STDOUT FORMAT:"}
+	else
+	  {$flag .= "OUTPUT FORMAT:"}
+
+	#Append the flags to the header as a sub-title if not hidden
+	if(!$usage_hash->{HIDDEN})
+	  {$flag .= "\n" . $usage_hash->{OPTFLAG}}
+
+	my $desc = $usage_hash->{FORMAT};
 
 	if(!defined($desc) || $desc eq '')
 	  {
-	    $desc = join('','The author of this script has not provided ',
-			 'a format description for this output file ',
-			 'type.  Please add a description using one of ',
-			 'the addOutfileOption or addOutfileSuffixOption ',
-			 'methods.');
-	    $ignore_empty = $ignore;
-	  }
-
-	$out .= alignHelpCols($flag,$desc) unless($ignore_empty);
-      }
-    else
-      {
-	#If one of the default outfile types was explicitly added and the other
-	#added by default, then add.
-	my $cycle_type   = 'both';   #Neither default was added
-	my $hash_ref     = '';
-	my $add_flag_str = '';
-	if($default_outfile_added)
-	  {
-	    $cycle_type = 'suffix';
-
-	    #We can assume there's only 1 since the default was added
-	    my $def_hash_ref = (grep {$_->{OPTTYPE} eq 'outfile'}
-				@$usage_array)[0];
-
-	    if(!$def_hash_ref->{HIDDEN})
-	      {
-		#We simply need to add the default --outfile flag to the list
-		#of flags for the first primary (or plain first) outfile suffix
-		#type later in the loop below.  So we must figure out which
-		#hash gets the added flag.
-		my @prim_out_hashes = grep {$_->{OPTTYPE} eq 'suffix' &&
-					      $_->{PRIMARY}} @$usage_array;
-
-		if(scalar(@prim_out_hashes))
-		  {
-		    $hash_ref = $prim_out_hashes[0];
-		    $add_flag_str = ',' . $def_hash_ref->{OPTFLAG};
-		  }
-		else
-		  {
-		    my $out_hashes =
-		      [grep {$_->{OPTTYPE} eq 'suffix'} @$usage_array];
-
-		    $hash_ref = $out_hashes->[0];
-		    $add_flag_str = ',' . $def_hash_ref->{OPTFLAG};
-		  }
-	      }
-	  }
-	elsif($default_outfile_suffix_added)
-	  {
-	    $cycle_type = 'outfile';
-
-	    #We can assume there's only 1 since the default was added
-	    my $def_hash_ref = (grep {$_->{OPTTYPE} eq 'suffix'}
-				@$usage_array)[0];
-
-	    if(!$def_hash_ref->{HIDDEN})
-	      {
-		#We simply need to add the default -o flag to the list of flags
-		#for the first primary (or plain first) outfile type later in
-		#the loop below.  So we must figure out which hash gets the
-		#added flag.
-		my @prim_out_hashes = grep {$_->{OPTTYPE} eq 'outfile' &&
-					      $_->{PRIMARY}} @$usage_array;
-
-		if(scalar(@prim_out_hashes))
-		  {
-		    $hash_ref = $prim_out_hashes[0];
-		    $add_flag_str = ',' . $def_hash_ref->{OPTFLAG};
-		  }
-		else
-		  {
-		    my $out_hashes =
-		      [grep {$_->{OPTTYPE} eq 'outfile'} @$usage_array];
-
-		    $hash_ref = $out_hashes->[0];
-		    $add_flag_str = ',' . $def_hash_ref->{OPTFLAG};
-		  }
-	      }
-	  }
-
-	foreach my $usage_hash (grep {($cycle_type eq 'both' ?
-				       ($_->{OPTTYPE} eq 'outfile' ||
-					$_->{OPTTYPE} eq 'suffix') :
-				       ($cycle_type eq 'outfile' ?
-				        $_->{OPTTYPE} eq 'outfile' :
-				        $_->{OPTTYPE} eq 'suffix')) &&
-					  !$_->{HIDDEN}} @$usage_array)
-	  {
-	    my $flag = '* ' . "OUTPUT FORMAT:\n" . $usage_hash->{OPTFLAG};
-
-	    #If this is the option that is getting a default-added output flag,
-	    #append it
-	    if($usage_hash eq $hash_ref)
-	      {$flag .= $add_flag_str}
-
-	    my $desc = $usage_hash->{FORMAT};
-
-	    if(!defined($desc) || $desc eq '')
-	      {
-		next if($ignore);
-		$desc = join('','The author of this script has not provided ',
+	    next if($ignore);
+	    $desc = join('',('The author of this script has not provided ',
 			     'a format description for this output file ',
 			     'type.  Please add a description using one of ',
 			     'the addOutfileOption or addOutfileSuffixOption ',
-			     'methods.');
-	      }
-
-	    $out .= alignHelpCols($flag,$desc);
+			     'methods.'));
 	  }
+
+	$out .= alignHelpCols($flag,$desc);
       }
 
     return($out);
@@ -11336,7 +12106,7 @@ sub getSummaryUsageOptStr
 	my $flag = getDefaultFlag($usage_hash->{OPTFLAG});
 
 	#Add to the required options string
-	if(defined($usage_hash->{REQUIRE}) && $usage_hash->{REQUIRE})
+	if(defined($usage_hash->{REQUIRED}) && $usage_hash->{REQUIRED})
 	  {
 	    $requireds .= ($first_reqd ? '' : ' ') . $flag;
 	    if(!$prim)
@@ -11404,7 +12174,7 @@ sub getSummaryUsageOptStr
 	elsif($local_extended)
 	  {
 	    $optionals .= ($first_optl ? '' : ',') . $flag;
-	    $optionals_wo_prim .= ($first_optl ? '' : ',') . $flag
+	    $optionals_wo_prim .= ($optionals_wo_prim eq '' ? '' : ',') . $flag
 	      unless($prim);
 	    $first_optl = 0;
 	  }
@@ -11417,8 +12187,9 @@ sub getSummaryUsageOptStr
 		     "[$optionals]\n" : ''),
 	       (($local_extended && $primary_inf_exists) ||
 		($primary_inf_exists && $primary_hidden) ?
-		"$script " . ($requireds ne '' ? "$requireds " : '') .
-		"[$optionals] < input_file\n" : ''),
+		"$script " . ($requireds_wo_prim ne '' ?
+			      "$requireds_wo_prim " : '') .
+		"[$optionals_wo_prim] < input_file\n" : ''),
 	       "\n"));
 
     return($summary_str);
@@ -11564,6 +12335,9 @@ end_print
 	  }
 
 	my @user_defaults = getUserDefaults();
+	if(!$local_extended &&
+	   scalar(grep {$_->{REQUIRED}} values(%$outfile_tagteams)))
+	  {print("^ 1 of 2 mutually exclusive options required.\n")}
 	print(scalar(@user_defaults) ?
 	      "Current user defaults: [@user_defaults].\n" :
 	      "No user defaults set.\n");
@@ -11576,7 +12350,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.057';
+    $VERSION       = '4.076';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
@@ -11587,16 +12361,16 @@ BEGIN
 			getInfile                    getOutfile
 			addInfileOption              addOutfileSuffixOption
 			addOutdirOption              addOutfileOption
-			addOptions                   addOption
-			addArrayOption               add2DArrayOption
+			addOption                    addOutfileTagteamOption
+			addOptions                   addArrayOption
+			add2DArrayOption             getOutHandleFileName
 			getNextFileGroup             getAllFileGroups
 			getNumFileGroups             getFileGroupSizes
                         setScriptInfo                getInHandleFileName
                         processCommandLine           resetFileGroupIterator
                         isForced                     headerRequested
                         isDryRun                     setDefaults
-                        isDebug                      getOutHandleFileName
-		        isVerbose);
+                        isDebug                      isVerbose);
     our @EXPORT_OK = qw(markTime                     getCommand
 			sglob                        getVersion
 			isStandardInputFromTerminal  isStandardOutputToTerminal
@@ -11828,7 +12602,7 @@ GETOPTVAL takes a reference to an array onto which values supplied on the comman
 
 If REQUIRED is a non-zero value (e.g. '1'), the script will quit with an error and a usage message if at least 1 value is not supplied by the user on the command line.  If required is not supplied or set to 0, the flag will be treated as optional.
 
-The DEFAULT parameter is not used to initialize the GETOPTVAL value, but rather is a string simply describing/defining the default in the usage message for this parameter.  Do not supply an array reference as the value for this parameter - string only.
+The DEFAULT parameter is not used to initialize the GETOPTVAL value, but rather is a string simply describing/defining the default in the usage message for this parameter.  Optionally, a reference to an array of references to arrays of scalars may be supplied.  The 2D array will be converted into a string using delimiting paranthases and commas, e.g.: "((1,2),(3,4)),((5),(6,7,8))", when displayed in the usage output's default for the given option.
 
 If HIDDEN is a non-zero value (e.g. '1'), the flag/option created by this method will not be a part of the usage output.  Note that if HIDDEN is non-zero, a DEFAULT must be supplied.
 
@@ -11905,7 +12679,7 @@ GETOPTVAL takes a reference to an array onto which values supplied on the comman
 
 If REQUIRED is a non-zero value (e.g. '1'), the script will quit with an error and a usage message if at least 1 value is not supplied by the user on the command line.  If required is not supplied or set to 0, the flag will be treated as optional.
 
-The DEFAULT parameter is not used to initialize the GETOPTVAL value, but rather is a string simply describing/defining the default in the usage message for this parameter.  Do not supply an array reference as the value for this parameter - string only.
+The DEFAULT parameter is not used to initialize the GETOPTVAL value, but rather is a scalar (or reference to an array of scalar) simply describing/defining the default in the usage message for this parameter.
 
 If HIDDEN is a non-zero value (e.g. '1'), the flag/option created by this method will not be a part of the usage output.  Note that if HIDDEN is non-zero, a DEFAULT must be supplied.
 
@@ -12389,7 +13163,7 @@ I<Code>
                               SMRY_DESC   => 'Input file(s).',
                               DETAIL_DESC => '1 or more text input files.',
                               FORMAT_DESC => 'ASCII text.');
-    my $oid = addOutfileSuffixOption(GETOPTKEY   => 'j=s',
+    my $oid = addOutfileSuffixOption(GETOPTKEY   => 'o=s',
                                      FILETYPEID  => $id1,
                                      GETOPTVAL   => undef,
                                      REQUIRED    => 0,
@@ -12427,6 +13201,114 @@ The user can supply an empty string ('') as an output file suffix which would ca
 Note that addOutfileOption() is a wrapper for a hidden and specially treated call to addInfileOption() containing the output file name as what is read in with the supplied flag, followed by a call to addOutfileSuffixOption() with a default set as an empty string.  The return value of addOutfileOption() is what is returned by the internal call to addOutfileSuffixOption().  In this way, getOutfile works for both output file suffix IDs and output file IDs.
 
 A COLLISIONMODE of 'rename' handles conflicting output file names by compounding input file names.  This requires multiple types of input files.  All of the files in the file set advanced to by the nextFileCombo() iterator are evaluated and the fewest number of input file names are concatenated together as is needed to make the output file names unique.
+
+=item C<addOutfileTagteamOption> GETOPTKEY_SUFF, GETOPTKEY_FILE, FILETYPEID [, PAIR_RELAT, GETOPTVAL, REQUIRED, PRIMARY, FORMAT_DESC, DEFAULT, DEFAULT_IS_FILE, HIDDEN_SUFF, HIDDEN_FILE, SMRY_DESC_SUFF, SMRY_DESC_FILE, DETAIL_DESC_SUFF, DETAIL_DESC_FILE, COLLISIONMODE_SUFF, COLLISIONMODE_FILE]
+
+Adds an output file suffix option and an output file option to the command line interface.  The resulting 2 options are mutually exclusive and allow the user to either specify a full output file name or an output file suffix (appended to an input file name) for the same generated output.
+
+The return value is an output type ID that behaves exactly the same way as the returned ID from either addOutfileOption() or addOutfileSuffixOption(), and is later used to obtain the output file names that were either fully supplied or constructed from the input file names, both of which are put into any output directory name(s) that the user has supplied on the command line (see getOutfile() and getNextFileGroup()).  The programmer does not have to be concerned with how the user supplied the output file names.
+
+Note, the interface will create a default outfile tagteam by if addOutfileOption() or addOutfileSuffixOption() (or both) are never called.
+
+Note, this method is essentially a wrapper to both of the addOutfileOption() and addOutfileSuffixOption() methods, thus for each parameter below, please refer to that method's parameter description..
+
+GETOPTKEY_SUFF & GETOPTKEY_FILE - See addOutfileSuffixOption's & addOutfileOption's GETOPTKEY parameter (respectively).
+
+FILETYPEID - See addOutfileSuffixOption's FILETYPEID & addOutfileOption's PAIR_WITH parameters.
+
+PAIR_RELAT - See addOutfileOption's PAIR_RELAT parameter.
+
+GETOPTVAL - See addOutfileSuffixOption's GETOPTVAL parameter.
+
+REQUIRED - See addOutfileSuffixOption's & addOutfileOption's REQUIRED parameter.
+
+PRIMARY - See addOutfileSuffixOption's & addOutfileOption's PRIMARY parameter.
+
+FORMAT_DESC - See addOutfileSuffixOption's & addOutfileOption's FORMAT_DESC parameter.
+
+DEFAULT - See addOutfileSuffixOption's DEFAULT parameter.
+
+DEFAULT_IS_FILE - If this is a non-zero value, the DEFAULT parameter (above) is supplied to addOutfileOption's DEFAULT parameter and addOutfileSuffixOption's DEFAULT parameter is supplied as undefined.  Only one or the other can have a default value, not both.
+
+HIDDEN_SUFF & HIDDEN_FILE - See addOutfileSuffixOption's & addOutfileOption's HIDDEN parameter (respectively).  Briefly - whether or not the option is hidden in the usage output.
+
+SMRY_DESC_SUFF & SMRY_DESC_FILE - See addOutfileSuffixOption's & addOutfileOption's SMRY_DESC parameter (respectively).
+
+DETAIL_DESC_SUFF & DETAIL_DESC_FILE - See addOutfileSuffixOption's & addOutfileOption's DETAIL_DESC parameter (respectively).
+
+COLLISIONMODE_SUFF & COLLISIONMODE_FILE - See addOutfileSuffixOption's & addOutfileOption's COLLISIONMODE parameter (respectively).
+
+All calls to addOutfileTagteamOption() must occur before any/all calls to processCommandLine(), nextFileCombo(), getOutfile, getNextFileGroup(), openIn(), openOut(), and getAllFileGroups().  If you wish to put calls to the add*Option methods at the bottom of the script, you must put them in a BEGIN block.
+
+I<EXAMPLE>
+
+=over 4
+
+I<Command>
+
+    #EXAMPLE1:
+    example.pl -i '*.txt' -o .out
+
+    #EXAMPLE2:
+    example.pl -i '*.txt' --outfile combined.out
+
+    #EXAMPLE3:
+    example.pl -i '*.txt'
+
+I<Code>
+
+    my $id1 = addInfileOption(GETOPTKEY   => 'i=s',
+                              REQUIRED    => 1,
+                              DEFAULT     => undef,
+                              PRIMARY     => 1,
+                              SMRY_DESC   => 'Input file(s).',
+                              DETAIL_DESC => '1 or more text input files.',
+                              FORMAT_DESC => 'ASCII text.');
+    my $oid = addOutfileTagteamOption(GETOPTKEY_SUFF     => 'o=s',
+                                      GETOPTKEY_FILE     => 'outfile=s',
+                                      FILETYPEID         => $id1,
+                                      PRIMARY            => 1,
+                                      FORMAT_DESC        => 'Tab delimited.',
+                                      SMRY_DESC_SUFF     => 'Outfile suffix.',
+                                      SMRY_DESC_FILE     => 'Outfile.',
+                                      DETAIL_DESC_SUFF   => 'Extension appended to file submitted via -i.',
+                                      DETAIL_DESC_FILE   => 'Outfile.  See --help for format.');
+
+I<Output>
+
+    #EXAMPLE1:
+    *.txt.out
+
+    #EXAMPLE2:
+    combined.out
+
+    #EXAMPLE3:
+    All output goes to STDOUT
+
+=back
+
+I<ASSOCIATED FLAGS>
+
+Default file options that are added if none defined (which also affect the behavior of this method):
+
+    -o                  Output file suffix. See addOutfileSuffixOption()
+    --outfile           Output file. See addOutfileOption()
+    -i                  Input file. See addInfileOption()
+
+
+I<LIMITATIONS>
+
+See LIMITATIONS for each of the wrapped methods: addOutfileOption() and addOutfileSuffixOption().
+
+I<ADVANCED>
+
+The output file ID that is returned is actually a tagteam ID.  When getOutfile() is called with the ID, it checks the ID to see if it is a tagteam ID.  If it is, it checks to see which of the two options in the tagteam were supplied by the user and returns the corresponding output file name (whether it was created using an input file name, or supplied as a full output file name by the user.
+
+The default COLLISIONMODE is different for the 2 types of options.  The default mode for the suffix option is 'error'.  I.e. If 2 file names are constructed with the same name/path, a fatal error occurs, preventing the script from processing any files.  The default mode for the create outfile option is 'merge', meaning if an output file name is supplied multiple times, the output is aggregated in that file (not overwritten).
+
+You can actually call addOutfileTagteamOption() once with no parameters to create the default output file options as long as addOutfileOption() and addOutfileSuffixOption() have not been called without any parameters.  If either addOutfileOption() or addOutfileSuffixOption() have not been called before processCommandLine() is called, they are called without any options and made into a tagteam with the first outfile option of the opposing type.  For example, if you call addOutfileSuffixOption('o=s') and never call addOutfileOption(), it is automatically called with no parameters and made into a tagteam with the -o option you explicitly created.  There is currently no way to prevent this automatic option creation, but if you do not want to allow a user to supply output files by one or the other method, you can create a hidden version of that option.
+
+FILETYPEID can actually be an optional parameter is there has only been 1 call to addInfileOption().  If there have been multiple input file options created, the FILETYPEID is required.
 
 =item C<closeIn> HANDLE
 
