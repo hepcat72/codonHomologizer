@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.15';
+our $VERSION = '1.16';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -1759,9 +1759,9 @@ sub pwMatrixToString
 #correspond to max_matches
 sub getCrossover1ScoreHash
   {
-    my $lesser           = $_[0];
-    my $greater          = $_[1];
-    my $matches          = $_[2];
+    my $lesser           = $_[0];  #Lesser  (in alphabetical order) amino acid
+    my $greater          = $_[1];  #Greater (in alphabetical order) amino acid
+    my $matches          = $_[2];  #Maximum number of matches possible in cdns
     my $flex_scores      = $_[3];
     my $usgobj           = $_[4];
     my $max_usg_score    = $_[5];
@@ -1781,8 +1781,8 @@ sub getCrossover1ScoreHash
 
     my $testcase = $lesser eq 'A' && $greater eq 'C';
 
-    my $codons1  = [getCodons($lesser,$usgobj)];  #Assumed to be sorted
-    my $codons2  = [getCodons($greater,$usgobj)];
+    my $codons1  = [getCodons($lesser,$usgobj)];  #Assumed to be sorted by
+    my $codons2  = [getCodons($greater,$usgobj)]; #descending usage value
 
     debug("Best homology among codons: [$matches].") if($testcase);
     debug("codons for $lesser: [",join(',',@$codons1),"].") if($testcase);
@@ -1790,27 +1790,43 @@ sub getCrossover1ScoreHash
 
     #This hash will track whether a codon pair with a matching pattern defined
     #by the flex scores exists or not, e.g. ATT/GTT is an MR match
-    my $best_flex_min_usage = {};
-    my $best_pair           = [];
+    my $best_flex_min_usage  = {};
+    my $best_pair            = [];
+    my $best_min_usage_score = 0;
 
     foreach my $codon1 (@$codons1)
       {
 	my $min_usage_score = getUsageScore($lesser,$codon1,$usgobj);
 
+	#We're only going to look at codon pairs that have the maximum number
+	#of matches possible given the 2 sets of codons (which was pre-
+	#determined and supplied to this sub
 	foreach my $codon2 (grep {getNumCodonMatches($codon1,$_) == $matches}
 			    @$codons2)
 	  {
+	    #For each pair of codons possible between the sets defined by the 2
+	    #amino acids, the score is influenced by the lesser of the 2 codon
+	    #usages.  We want to select the pair with the largest lesser usage
+	    #value.  This is selected from among the pairs that have the same
+	    #flex code and the flex codes considered are those with the
+	    #supplied number of matches.
+
 	    #Determine the lesser of the 2 usage scores for this codon pair
 	    if(getUsageScore($greater,$codon2,$usgobj) < $min_usage_score)
 	      {$min_usage_score = getUsageScore($greater,$codon2,$usgobj)}
 
-	    #Save the greater of the min usage scores among all pairs
+	    #Save the greater of the min usage scores among all pairs with the
+	    #same flex code
 	    my $flex_code = getCrossover1FlexCode($codon1,$codon2);
 	    if(!exists($best_flex_min_usage->{$flex_code}) ||
 	       $min_usage_score > $best_flex_min_usage->{$flex_code})
+	      {$best_flex_min_usage->{$flex_code} = $min_usage_score}
+
+	    #Save the greater of the min usage scores among all pairs
+	    if($min_usage_score > $best_min_usage_score)
 	      {
-		$best_flex_min_usage->{$flex_code} = $min_usage_score;
 		$best_pair = [$codon1,$codon2];
+		$best_min_usage_score = $min_usage_score;
 	      }
 
 	    my $indiv_score =
