@@ -221,7 +221,15 @@ my $stretch_out_type =
 			 FORMAT_DESC   => ('Tab-delimited text file.  The ' .
 					   'first column is the sequence ' .
 					   'ID, as parsed from the deflines ' .
-					   'of -i.'),
+					   'of -i.  Each subsequent pair of ' .
+					   'columns is a start & stop ' .
+					   'denoting aligned identity ' .
+					   'between the 2 sequences.  Each ' .
+					   'output file contains ' .
+					   'coordinates for a pair of ' .
+					   'sequences.  A separate output ' .
+					   'file for each pair of sequences ' .
+					   'is generated.'),
 			 COLLISIONMODE => 'error');
 
 my $aa_suffix = '.faa';
