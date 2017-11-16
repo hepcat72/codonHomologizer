@@ -10,7 +10,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '0.002';
+our $VERSION = '0.003';
 
 setScriptInfo(CREATED => '7/31/2017',
               VERSION => $VERSION,
@@ -64,16 +64,16 @@ addOption(GETOPTKEY   => 's|stretch-size=s',
 			  'lengths.'));
 
 my $global_play_min_def = 50;
-my $global_play_def = 100;
+my $global_play_def     = 100;
 my($global_play);
-my($global_play_opt);      #How much the coordinates are allowed to slide apart
+my($global_play_opt);     #How much the coordinates are allowed to slide apart
                           #Set to the difference in sequence length as a min
 addOption(GETOPTKEY   => 'g|offset-max-global=i',
 	  GETOPTVAL   => \$global_play_opt,
 	  REQUIRED    => 0,
 	  DEFAULT     => 'auto*',
 	  HIDDEN      => 0,
-	  SMRY_DESC   => 'Relative coordinate search range.',
+	  SMRY_DESC   => 'Global search distance.',
 	  DETAIL_DESC => ("Matches between sequences are only found if they " .
 			  "occur within this relative coordinate range.  " .
 			  "E.g. If this value is set to N, a match at " .
@@ -84,11 +84,10 @@ addOption(GETOPTKEY   => 'g|offset-max-global=i',
 			  "In other words, once a match is located, the " .
 			  "next match is restricted to everything to the " .
 			  "right in each sequence.  Must be greater than or " .
-			  "equal to --offset-max-local.  *If the difference " .
-			  "between lengths of the sequences is greater than " .
-			  "[$global_play_min_def], the default range is the " .
-			  "lesser of either the sequence size difference or " .
-			  "[$global_play_def]."));
+			  "equal to --offset-max-local.  *The default is " .
+			  "the difference in the sequence lengths or " .
+			  "[$global_play_def] (whichever is smaller).  The " .
+			  "minimum default value is [$global_play_min_def]."));
 
 my($local_play_opt);
 my($local_play);          #How much the coordinates are allowed to slide apart
@@ -359,6 +358,7 @@ while(nextFileCombo())
 	next;
       }
 
+    #For each possible pair of sequences
     my $pair_id = 0;
     foreach my $first (0..($#{$recs} - 1))
       {
@@ -529,7 +529,7 @@ sub getMaxStretches
     my $start2         = $_[11] || 0;
     my $num_matches    = $_[12] || 0;
     my $abs_diffs_sum  = $_[13] || 0; #Sum of the local shifted distances (not
-                                      #counting the first difference
+                                      #counting the first difference)
     my $first          = $_[14] || 0;
 
     debug({LEVEL => 2},"getMaxStretches1(",
