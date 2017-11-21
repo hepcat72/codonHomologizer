@@ -33,7 +33,7 @@ my($default_stub,
 
 #Standard variables controlled by the command line
 my($header,
-   $collide_mode,
+   $user_collide_mode,  #Overrides everything
    $error_limit,
    $help,
    $extended,
@@ -110,6 +110,7 @@ my($required_infile_types,
    $outfile_tagteams,
    $tagteam_to_supplied_oid,
    $collid_modes_array,
+   $def_collide_mode,          #Used if not specified per outfile type
    $def_collide_mode_suff,
    $def_collide_mode_outf,
    $outfile_mode_lookup,
@@ -172,7 +173,8 @@ sub _init
     $output_file_sets      = [];
 
     #These command line params should be cleared
-    $collide_mode          = undef; #This has to be undef to know if user-set
+    $user_collide_mode     = undef; #This has to be undef to know if user-set
+    $def_collide_mode      = undef; #This has to be undef to know if prog-set
     $error_limit           = undef;
     $help                  = undef;
     $extended              = undef;
@@ -204,7 +206,7 @@ sub _init
        'header!'              => \$header,                   #OPTIONAL [On]
        'error-type-limit=i'   => \$error_limit,              #OPTIONAL [5]
        'save-as-default'      => \$use_as_default,           #OPTIONAL [Off]
-       'collision-mode=s'     => \$collide_mode,             #OPTIONAL [error]
+       'collision-mode=s'     => \$user_collide_mode,        #OPTIONAL [error]
        'pipeline-mode!'       => \$pipeline_mode,            #OPTIONAL [auto]
 
        #The presentation of these options varies, but they're always recognized
@@ -440,13 +442,16 @@ sub addInfileOption
 
     $get_opt_str = fixStringOpt($get_opt_str);
 
-    if(!isGetOptStrValid($get_opt_str,'infile',$adding_default))
+    if(!isGetOptStrValid($get_opt_str,'infile'))
       {
 	if($adding_default)
 	  {warning("Unable to add default -i (input file) parameter.")}
 	else
-	  {error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
-		 "for infile type.")}
+	  {
+	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
+		  "for infile type.");
+	    quit(-5);
+	  }
 	return(undef);
       }
 
@@ -843,7 +848,7 @@ sub isGetOptStrValid
   {
     my $get_opt_str = $_[0];
     my $type        = $_[1];
-    my $allow_dupes = $_[2];
+    my $allow_dupes = defined($_[2]) ? $_[2] : 0;
     my $answer      = 1;
 
     my @existing = getDupeFlags($get_opt_str);
@@ -851,11 +856,12 @@ sub isGetOptStrValid
       {
 	if(!$allow_dupes)
 	  {
-	    error("Duplicate flags detected: [",join(',',@existing),"].");
+	    warning("Duplicate flags detected: [",join(',',@existing),"].");
 	    debug({LEVEL => -1},"Existing flags: [",
 		  join(',',keys(%$GetOptHash)),
 		  "]. Adding Flag: [$get_opt_str]");
-	    quit(-5);
+	    $answer = 0;
+	    return($answer);
 	  }
 	else
 	  {debug({LEVEL => -2},
@@ -945,15 +951,13 @@ sub getDupeFlags
 	foreach my $flag (split(/\|+/,$opt_str))
 	  {
 	    my $tflag = $flag;
-	    if($negatable && length($flag) > 1)
-	      {$tflag =~ s/^no-?//}
 
 	    if(exists($flag_check_hash->{$flag}))
 	      {push(@$existing,(length($flag) == 1 ? "-$flag" : "--$flag"))}
 
 	    $flag_check_hash->{$tflag} = 0;
 
-	    if($negatable && length($flag) > 1)
+	    if($negatable)
 	      {
 		$flag_check_hash->{"no$tflag"}  = 0;
 		$flag_check_hash->{"no-$tflag"} = 0;
@@ -981,8 +985,7 @@ sub addOutfileOption
 			  [scalar(@_) ? qw(GETOPTKEY) : ()],
 			  [@_]);
     my $get_opt_str = $in[0]; #e.g. 'o|outfile=s'
-    my $collid_mode = (defined($in[1]) ?
-		       $in[1] : getCollisionMode(undef,'outfile'));
+    my $collid_mode = getCollisionMode(undef,'outfile',$in[1]);
     my $required    = $in[2]; #Is file required?: 0 (false) or non-zero (true)
     my $primary     = defined($in[3]) ? $in[3] : 1; #non-0:stdout 0:no output
     my $default     = $in[4]; #e.g. 'my_output_file.txt'
@@ -1033,13 +1036,16 @@ sub addOutfileOption
 
     $get_opt_str = fixStringOpt($get_opt_str);
 
-    if(!isGetOptStrValid($get_opt_str,'outfile',$adding_default))
+    if(!isGetOptStrValid($get_opt_str,'outfile'))
       {
 	if($adding_default)
 	  {warning("Unable to add default --outfile (output file) option.")}
 	else
-	  {error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
-		 "for outfile type.")}
+	  {
+	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
+		  "for outfile type.");
+	    quit(-73);
+	  }
 	return(undef);
       }
 
@@ -1307,9 +1313,7 @@ sub addOutfileSuffixOption
                                   #Empty/undefined = exclude from short usage
     my $detail_desc     = $in[8]; #e.g. 'Input file(s).  Space separated,...'
     my $format_desc     = $in[9]; #e.g. 'Tab delimited text w/ cols: 1.Name...'
-    my $loc_collid_mode = (defined($in[10]) ? #Adds modes to collid_modes_array
-			   $in[10] :          #1 of: merge,rename,error
-			   getCollisionMode(undef,'suffix'));
+    my $loc_collid_mode = getCollisionMode(undef,'suffix',$in[10]);
     ##TODO: Don't use the generic/global collide_mode here - implement an
     #output mode that the user can control per outfile type.  See requirement
     #114
@@ -1359,7 +1363,7 @@ sub addOutfileSuffixOption
 	$get_opt_str                  = 'o|outfile-extension|outfile-suffix=s';
 	$required                     = 0;
 	$loc_collid_mode              = getCollisionMode(undef,'suffix');
-	##TODO: Use a command line flag specific to the outfile type instead of the current collide_mode which applies to all outfile types.  Create the flag when the outfile suffix option is created (but only if the programmer specified that the user is to choose).  See requirement 114
+	##TODO: Use a command line flag specific to the outfile type instead of the current def_collide_mode which applies to all outfile types.  Create the flag when the outfile suffix option is created (but only if the programmer specified that the user is to choose).  See requirement 114
 	#The descriptions are added below
       }
     else
@@ -1459,13 +1463,16 @@ sub addOutfileSuffixOption
 
     $get_opt_str = fixStringOpt($get_opt_str);
 
-    if(!isGetOptStrValid($get_opt_str,'suffix',$adding_default))
+    if(!isGetOptStrValid($get_opt_str,'suffix'))
       {
 	if($adding_default)
-	  {warning("Unable to add -o (output file suffix) option.")}
+	  {warning("Unable to add default -o (output file suffix) option.")}
 	else
-	  {error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
-		 "for outfile-suffix type.")}
+	  {
+	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
+		  "for outfile-suffix type.");
+	    quit(-74);
+	  }
 	return(undef);
       }
 
@@ -2344,14 +2351,17 @@ sub addOutdirOption
 
     $get_opt_str = fixStringOpt($get_opt_str);
 
-    if(!isGetOptStrValid($get_opt_str,'outdir',$adding_default))
+    if(!isGetOptStrValid($get_opt_str,'outdir'))
       {
 	if($adding_default)
 	  {warning("Unable to add default --outdir (output directory) ",
 		   "option.")}
 	else
-	  {error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
-		 "for outdir type.")}
+	  {
+	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
+		  "for outdir type.");
+	    quit(-75);
+	  }
 	return(undef);
       }
 
@@ -2504,8 +2514,15 @@ sub addOption
     if(!$is_array_opt &&
        !isGetOptStrValid($get_opt_str,'general',$is_variable_opt))
       {
-	error("Invalid GetOpt parameter flag definition: [$get_opt_str] for ",
-	      "general type.");
+	if($is_variable_opt)
+	  {warning("Unable to add default variable run mode option.",
+		   {DETAIL => "GetOptStr: [$get_opt_str]."})}
+	else
+	  {
+	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
+		  "for general type.");
+	    quit(-76);
+	  }
 	return(undef);
       }
 
@@ -2648,7 +2665,7 @@ sub addArrayOption
       {
 	error("Invalid GetOpt parameter flag definition: [$get_opt_str] for ",
 	      "1darray type.");
-	return(undef);
+	quit(-77);
       }
 
     #If no summary usage was provided for this option
@@ -2776,7 +2793,7 @@ sub add2DArrayOption
       {
 	error("Invalid GetOpt parameter flag definition: [$get_opt_str] for ",
 	      "2darray type.");
-	return(undef);
+	quit(-78);
       }
 
     #If no summary usage was provided for this option
@@ -2903,7 +2920,7 @@ sub addOptions
 	  {
 	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
 		  "for general type.");
-	    next;
+	    quit(-79);
 	  }
 
 	if((!defined($commandeer) || !$commandeer) &&
@@ -3218,6 +3235,35 @@ sub isSuffixPrimary
 			       $suffix_id_lookup->[$suffix_id]->[1]));
   }
 
+#Determines whether a suffix is defined or not.  By "defined", what is meant
+#depends on how the output file was defined by the programmer.  If the outfile
+#type was created using addOutfileSuffixOption, then the result is whether or
+#not the value for the suffix is defined (the straight-forward possibility).
+#If however, the outfile type was defined by addOutfileOption, then the suffix
+#is a hidden one with an empty string as a value and the suffix is "defined" if
+#any files were supplied by the user for that option.
+sub isSuffixDefined
+  {
+    my $file_index = $_[0];
+    my $suff_index = $_[1];
+    my $is_defined = 0;
+
+    #If this is a suffix of an outfile type added by addOutfileOption
+    if(exists($outfile_types_hash->{$file_index}))
+      {
+	#Return true if there's anything in this outfile type's input files
+	#array
+	$is_defined =
+	  scalar(grep {my $a=$_;defined($a) && scalar(grep {defined($_)} @$a)}
+		 @{$input_files_array->[$file_index]});
+      }
+    else
+      {$is_defined =
+	 defined($outfile_suffix_array->[$file_index]->[$suff_index])}
+
+    return($is_defined);
+  }
+
 #Given an input file type index and a suffix index, returns whether the output
 #for files with that suffix is primary or not (i.e. whether, when no suffix is
 #supplied, output should go to STDOUT.  The structure of $suffix_primary_vals
@@ -3244,9 +3290,13 @@ sub getOutfile
     unless($processCommandLine_called)
       {processCommandLine()}
 
+    #If this is the first time we've returned any files, set up the file set
+    #counter
     if(!defined($file_set_num))
       {$file_set_num = 0}
 
+    #If we're past the number of files supplied by the user, reset the file set
+    #counter and return undef
     if($file_set_num >= scalar(@$input_file_sets))
       {
 	$file_set_num = 0;
@@ -3262,7 +3312,8 @@ sub getOutfile
     if(defined($suffix_id) && exists($outfile_tagteams->{$suffix_id}))
       {$suffix_id = tagteamToSuffixID($suffix_id)}
 
-    #If the suffix ID provided does not exist
+    #If the suffix ID provided does not exist.  Note, this works for both
+    #outfile suffix types and outfile types (because it has a hidden suffix ID)
     if(defined($suffix_id) &&
        ($suffix_id >= scalar(@$suffix_id_lookup) ||
 	!defined($suffix_id_lookup->[$suffix_id]) ||
@@ -3273,28 +3324,33 @@ sub getOutfile
 	return(undef);
       }
     #Else if no ID was provided and there's only one existing suffix ID
-    elsif(!defined($suffix_id) && scalar(@$suffix_id_lookup) == 1)
+    elsif(!defined($suffix_id) &&
+	  scalar(grep {scalar(@$_)} @$suffix_id_lookup) == 1)
       {$suffix_id = 0}
     #Else if no ID was provided and there's only 1 output file type supplied
     #on the command line
     elsif(!defined($suffix_id) &&
-	  scalar(grep {defined($output_file_sets->[$file_set_num]
-			       ->[$_->[0]]->[$_->[1]])}
+	  scalar(grep {scalar(@$_) &&
+			 defined($output_file_sets->[$file_set_num]
+				 ->[$_->[0]]->[$_->[1]])}
 		 @$suffix_id_lookup) == 1)
       {
-	$suffix_id = (grep {defined($output_file_sets->[$file_set_num]
-				    ->[$suffix_id_lookup->[$_]->[0]]
-				    ->[$suffix_id_lookup->[$_]->[1]])}
+	$suffix_id = (grep {scalar(@{$suffix_id_lookup->[$_]}) &&
+			      defined($output_file_sets->[$file_set_num]
+				      ->[$suffix_id_lookup->[$_]->[0]]
+				      ->[$suffix_id_lookup->[$_]->[1]])}
 		      (0..$#{$suffix_id_lookup}))[0];
       }
     #Else if no ID was provided and no output files have been supplied
     elsif(!defined($suffix_id) &&
-	  scalar(grep {defined($output_file_sets->[$file_set_num]
-			       ->[$_->[0]]->[$_->[1]])}
+	  scalar(grep {scalar(@$_) &&
+			 defined($output_file_sets->[$file_set_num]
+				 ->[$_->[0]]->[$_->[1]])}
 		 @$suffix_id_lookup) == 0)
       {return(undef)}
     #Else if no ID was provided and no output file types have been defined
-    elsif(!defined($suffix_id) && scalar(@$suffix_id_lookup) == 0)
+    elsif(!defined($suffix_id) &&
+	  scalar(grep {scalar(@$_)} @$suffix_id_lookup) == 0)
       {
 	error("No output file (or suffix) options have been added to the ",
 	      "command line interface.");
@@ -3302,13 +3358,16 @@ sub getOutfile
       }
     #Else if no ID was provided and there are multiple outfile types defined
     #and supplied
-    elsif(!defined($suffix_id) && scalar(@$suffix_id_lookup) > 1)
+    elsif(!defined($suffix_id) &&
+	  scalar(grep {scalar(@$_)} @$suffix_id_lookup) > 1)
       {
-	debug({LEVEL => -2},"There are [",scalar(@$suffix_id_lookup),
+	debug({LEVEL => -2},"There are [",
+	      scalar(grep {scalar(@$_)} @$suffix_id_lookup),
 	      "] possible suffixes, for file types [",
-	      join(',',map {$_->[0]} @$suffix_id_lookup),
+	      join(',',map {$_->[0]} grep {scalar(@$_)} @$suffix_id_lookup),
 	      "] respectively, and each with these suffix indexes: [",
-	      join(',',map {$_->[1]} @$suffix_id_lookup),"].  There are [",
+	      join(',',map {$_->[1]} grep {scalar(@$_)} @$suffix_id_lookup),
+	      "].  There are [",
 	      scalar(@{$output_file_sets->[$file_set_num]}),
 	      "] output file types existing in the output file sets array.  ",
 	      "Each type has this many suffixes: [",
@@ -3316,25 +3375,29 @@ sub getOutfile
 		   map {scalar(@$_)} @{$output_file_sets->[$file_set_num]}),
 	      "].  This many of them have defined outfile names (i.e. were ",
 	      "provided on the command line): [",
-	      scalar(grep {defined($output_file_sets->[$file_set_num]
-				   ->[$_->[0]]->[$_->[1]])}
+	      scalar(grep {scalar(@$_) &&
+			     defined($output_file_sets->[$file_set_num]
+				     ->[$_->[0]]->[$_->[1]])}
 		     @$suffix_id_lookup),
 	      "].  The outfile names are: [",
 	      join(',',map {$output_file_sets->[$file_set_num]
 			      ->[$_->[0]]->[$_->[1]]}
-		   grep {defined($output_file_sets->[$file_set_num]
-				 ->[$_->[0]]->[$_->[1]])} @$suffix_id_lookup),
+		   grep {scalar(@$_) &&
+			   defined($output_file_sets->[$file_set_num]
+				   ->[$_->[0]]->[$_->[1]])}
+		   @$suffix_id_lookup),
 	      "].");
 
 	#If there are only 2 outfile types, at least 1 is a default, and both
 	#types were supplied on the command line
-	if(scalar(@$suffix_id_lookup) == 2 &&
+	if(scalar(grep {scalar(@$_)} @$suffix_id_lookup) == 2 &&
 	   ($default_outfile_suffix_added || $default_outfile_added) &&
 	   scalar(#The suffix is defined
-		  grep {defined($_)}
+		  grep {isSuffixDefined($_->[0],$_->[1])}
 
-		  #Convert to contained suffixes (ie. the vals of the suffixes)
-		  map {@{$outfile_suffix_array->[$_]}}
+		  #Convert to an array of file and suff indexes
+		  map {my $fi=$_;map {[$fi,$_]}
+			 (0..$#{$outfile_suffix_array->[$fi]})}
 
 		  #The associated infile array is populated (i.e. -i or
 		  #--outfile because it's saved as an infile and marked in the
@@ -3355,41 +3418,8 @@ sub getOutfile
 		  "]).  Please use one or the other.");
 	    return(undef);
 	  }
-	#Else if there are only 2 outfile types, both are default, and one
-	#type was supplied on the command line
-	elsif(scalar(@$suffix_id_lookup) == 2 &&
-	      $default_outfile_suffix_added && $default_outfile_added &&
-	      scalar(#The suffix is defined
-		     grep {defined($_)}
-
-		     #Convert to contained suffixes (ie. the suffix values)
-		     map {@{$outfile_suffix_array->[$_]}}
-
-		     #The associated infile array is populated (i.e. -i or
-		     #--outfile because it's saved as an infile and marked in
-		     #the outfile_types_hash)
-		     grep {defined($input_files_array->[$_]) &&
-			     scalar(@{$input_files_array->[$_]})}
-
-		     #Indexes of the outfile suffixes array
-		     0..$#{$outfile_suffix_array}) == 1)
-	  {
-	    $suffix_id =
-	      (#There's only one suffix for this infile type and it's defined
-	       grep {scalar(@{$outfile_suffix_array->[$_]}) == 1 &&
-		       defined($outfile_suffix_array->[$_]->[0])}
-
-	       #The associated infile array is populated (i.e. -i or
-	       #--outfile because it's saved as an infile and marked in
-	       #the outfile_types_hash)
-	       grep {defined($input_files_array->[$_]) &&
-		       scalar(@{$input_files_array->[$_]})}
-
-	       #Indexes of the outfile suffixes array
-	       0..$#{$outfile_suffix_array});
-	  }
 	#Else if there are only 2 outfile types and a tagteam exists
-	elsif(scalar(@$suffix_id_lookup) == 2 &&
+	elsif(scalar(grep {scalar(@$_)} @$suffix_id_lookup) == 2 &&
 	      scalar(keys(%$outfile_tagteams)) == 1)
 	  {
 	    my $ttid = (keys(%$outfile_tagteams))[0];
@@ -3406,9 +3436,10 @@ sub getOutfile
 			    "by the fact that an options is 'primary', in ",
 			    "which case output defaults to STDOUT when not ",
 			    "defined on the command line.  There are [",
-			    scalar(grep {defined($output_file_sets
-						 ->[$file_set_num]->[$_->[0]]
-						 ->[$_->[1]])}
+			    scalar(grep {scalar(@$_) &&
+					   defined($output_file_sets
+						   ->[$file_set_num]->[$_->[0]]
+						   ->[$_->[1]])}
 				   @$suffix_id_lookup),"] output ",
 			    "file types that have either been defined and ",
 			    "supplied on the command line or which are ",
@@ -3416,13 +3447,19 @@ sub getOutfile
 			    "supplied on the command line) with values [",
 			    join(',',map {$output_file_sets->[$file_set_num]
 					    ->[$_->[0]]->[$_->[1]]}
-				 grep {defined($output_file_sets
-					       ->[$file_set_num]->[$_->[0]]
-					       ->[$_->[1]])}
+				 grep {scalar(@$_) &&
+					 defined($output_file_sets
+						 ->[$file_set_num]->[$_->[0]]
+						 ->[$_->[1]])}
 				 @$suffix_id_lookup),"]."))});
 	    return(undef);
 	  }
       }
+
+    if($suffix_id > $#{$suffix_id_lookup})
+      {error("Suffix ID out of bounds.")}
+    debug({LEVEL => -99},
+	  "Suffix ID is [",(defined($suffix_id) ? $suffix_id : 'undef'),"].");
 
     my $file_type_index = $suffix_id_lookup->[$suffix_id]->[0];
     my $suffix_index    = $suffix_id_lookup->[$suffix_id]->[1];
@@ -3445,6 +3482,10 @@ sub getOutfile
 	error("Output file was not set up.");
 	return(undef);
       }
+
+    debug({LEVEL => -99},"Returning outfile for set [$file_set_num], file ",
+	  "type (index) [$file_type_index], and suffix index [$suffix_index",
+	  "].");
 
     return($output_file_sets->[$file_set_num]->[$file_type_index]
 	   ->[$suffix_index]);
@@ -4889,7 +4930,7 @@ sub getOptions
     $verbose             = 0       unless(defined($verbose));
     $force               = 0       unless(defined($force));
     $header              = 0       unless(defined($header));
-    $collide_mode        = ''      unless(defined($collide_mode));
+    $user_collide_mode   = ''      unless(defined($user_collide_mode));
     $extended            = 0       unless(defined($extended));
     $error_limit_default = 5       unless(defined($error_limit_default));
     $error_limit         = $error_limit_default unless(defined($error_limit));
@@ -7580,17 +7621,15 @@ sub getFileSets
                                   #provided, the returned outfile array will
                                   #contain outfile stubs to which you must
                                   #append your own suffix.
-    my $loc_collid_mode = ($collide_mode ne '' ? $collide_mode :
-			   (defined($_[3]) ? $_[3] : getCollisionMode()));
+    my $loc_collid_mode = getCollisionMode(undef,undef,$_[3]);
                                   #The user can over-ride individual settings.
-                                  #If collide_mode (which is user-controlled)
-                                  #has a value, use it, otherwise, if
-                                  #individual collision modes for each outfile
-                                  #type were provided, use it/them.  Lastly,
-                                  #without any other explicit setting,
-                                  #determine a default collision mode from
-                                  #getCollisionMode (guaranteed to provide a
-                                  #value).  This may change when requirement
+                                  #If user_collide_mode has a value, use it,
+                                  #otherwise, if individual collision modes for
+                                  #each outfile type were provided, use it/
+                                  #them.  Lastly, without any other explicit
+                                  #setting, determine a default collision mode
+                                  #from getCollisionMode (guaranteed to provide
+                                  #a value).  This may change when requirement
                                   #114 is implemented.
                                   #OPTIONAL [error]{merge,rename,error} Output
                                   #conflicts mode determines what to try to do
@@ -7615,7 +7654,9 @@ sub getFileSets
 						       $_ : 'undef'} @$tm) :
 				       'undef')} @{$_[3]}) .
 	    ')') : 'undef'),"].  Global collide mode: [",getCollisionMode(),
-	  "].");
+	  "].  User over-ridden collide-mode: [$user_collide_mode].  ",
+	  "Programmer global collide-mode: [",
+	  (defined($def_collide_mode) ? $def_collide_mode : 'undef'),"]");
 
     debug({LEVEL => -1},"Called with outfile suffixes: [[",
 	  join('],[',map {my $a = $_;join(',',map {defined($_) ? $_ : 'undef'}
@@ -7831,7 +7872,7 @@ sub getFileSets
       }
 
     #debug({LEVEL => -99},"First output collide mode: ",
-    #	  Dumper($collide_mode));
+    #	  Dumper($user_collide_mode));
 
     ##
     ## Error-check/fix the loc_collid_mode (a 2D array of strings)
@@ -8340,7 +8381,7 @@ sub getFileSets
 		my $stub = $file;
 		if(defined($stub))
 		  {
-		    #Us the default outfile stub if this is a redirect
+		    #Use the default outfile stub if this is a redirect
 		    $stub = $outfile_stub if($stub eq '-');
 
 		    #Eliminate any path strings from the file name
@@ -8441,15 +8482,18 @@ sub getFileSets
     debug({LEVEL => -1},"Processing input file sets: [(",
 	  join('),(',(map {my $a = $_;join(',',map {defined($_) ? $_ : 'undef'}
 					   @$a)} @$infile_sets_array)),
-	  ")] and output stubs: [(",
+	  ")] and output files: [(",
 	  join('),(',
                (map {my $a = $_;
-                     join(',',map {my $b = $_;defined($b) ? '[' .
-                                     join('],[',map {defined($_) ?
-                                                       ($_ eq '' ?
-                                                        'EMPTY-STRING' : $_) :
-                                                         'undef'} @$b) .
-                                              ']' : 'undef'}
+                     join(',',map {my $b = $_;defined($b) ?
+				     scalar(@$b) == 0 ? '[EMPTY]' :
+				       '[' .
+					 join('],[',map {defined($_) ?
+							   ($_ eq '' ?
+							    'EMPTY-STRING' :
+							    $_) :
+							      'undef'} @$b) .
+								']' : 'undef'}
 		@$a)} @$outfiles_sets_array)),")].");
 
     recordOutfileModes($outfiles_sets_array,$loc_collid_mode);
@@ -8483,12 +8527,13 @@ sub recordOutfileModes
       }
   }
 
-#Globals used: $collide_mode
+#Globals used: $user_collide_mode
 sub getCollisionMode
   {
-    my $outfile      = $_[0];
-    my $outfile_type = $_[1]; #'outfile' or 'suffix', i.e. called from
-                              #addOutfile[Suffix]Option
+    my $outfile       = $_[0];
+    my $outfile_type  = $_[1]; #'outfile' or 'suffix', i.e. called from
+                               #addOutfile[Suffix]Option
+    my $supplied_mode = $_[2];
 
     #Return the default collision mode is no file name supplied
     if(!defined($outfile))
@@ -8496,8 +8541,14 @@ sub getCollisionMode
 	if($command_line_processed)
 	  {
 	    #If the user set the collision mode using --collision-mode
-	    if(defined($collide_mode) && $collide_mode ne '')
-	      {return($collide_mode)}
+	    if(defined($user_collide_mode) && $user_collide_mode ne '')
+	      {return($user_collide_mode)}
+	    #Else if the mode was defined in the call
+	    elsif(defined($supplied_mode))
+	      {return($supplied_mode)}
+	    #Else if the programmer defined a global mode
+	    elsif(defined($def_collide_mode) && $def_collide_mode ne '')
+	      {return($def_collide_mode)}
 	    #Else if this is being called for a default from an
 	    #addOutfile[Suffix]Option method
 	    elsif(defined($outfile_type))
@@ -8520,9 +8571,12 @@ sub getCollisionMode
 	  }
 	else
 	  {
-	    #If the programmer set the collision mode using setDefaults
-	    if(defined($collide_mode) && $collide_mode ne '')
-	      {return($collide_mode)}
+	    #If the mode was defined in the call
+	    if(defined($supplied_mode))
+	      {return($supplied_mode)}
+	    #Else if the programmer set the collision mode using setDefaults
+	    elsif(defined($def_collide_mode) && $def_collide_mode ne '')
+	      {return($def_collide_mode)}
 	    #Else if this is a tracked outfile type (implied by a defined type)
 	    elsif(defined($outfile_type))
 	      {
@@ -8550,8 +8604,8 @@ sub getCollisionMode
 	#Else if the user (or programmer) has set the collide mode explicitly
 	##TODO: This will change with requirement 114.  Also see comments in
 	##      requirement 219
-	elsif(defined($collide_mode) && $collide_mode ne '')
-	  {return($collide_mode)}
+	elsif(defined($user_collide_mode) && $user_collide_mode ne '')
+	  {return($user_collide_mode)}
 	#Else if the command line has been processed
 	elsif($command_line_processed)
 	  {
@@ -9843,18 +9897,20 @@ sub GetNextIndepCombo
     return(1);
   }
 
-#This method returns 2 arrays.  It creates an array of output file names
-#and an array of output file stubs from the input file names and the output
-#directories (in case the coder wants to handle output file name construction
-#on their own).  It checks all the future output files for possible overwrite
-#conflicts and checks for existing output files.  It quits if it finds a
-#conflict.  It uses the collide_modes array to determine whether a conflict
-#is actually a conflict or just should be appended to when encountered.  If
-#the collision mode is rename, it tries to avoid conflicting non-merging
-#output files by joining the input file names with delimiting dots (in the
-#order supplied in the stubs array).  It smartly compounds with a single file
-#name if that file name is unique, otherwise, it joins all file names.
-#ASSUMES that collide_modes 2D array is properly populated.
+#This method returns 3 arrays.  It creates an array of output file names, an
+#array of output file stubs from the input file names and output directories
+#(in case the coder wants to handle output file name construction on their
+#own), and a skips array denoting which sets should be skipped because the
+#output file already exists.  It checks all the future output files for
+#possible overwrite conflicts and checks for existing output files.  It quits
+#if it finds a conflict.  It uses the user_collide_modes array to determine whether
+#a conflict is actually a conflict or just should be appended to when
+#encountered.  If the collision mode is rename, it tries to avoid conflicting
+#non-merging output files by joining the input file names with delimiting dots
+#(in the order supplied in the stubs array).  It smartly compounds with a
+#single file name if that file name is unique, otherwise, it joins all file
+#names.
+#ASSUMES that user_collide_modes 2D array is properly populated.
 sub makeCheckOutputs
   {
     my $stub_sets          = copyArray($_[0]);#REQUIRED 2D array of stub combos
@@ -10014,15 +10070,18 @@ sub makeCheckOutputs
 			#Don't add standard out if a suffix has been defined
 			#for either this outfile type or of a possible tagteam
 			#partner outfile type
-			if(!defined($suffix) &&
+			if(!isSuffixDefined($type_index,$suff_index) &&
 			   ($partner_defined ||
 			    !isTypeSuffixPrimary($type_index,$suff_index)))
 			  {
-			    push(@{$outfiles_sets->[-1]->[$type_index]},undef);
+			    debug({LEVEL => -99},"Suffix is not defined.");
+			    push(@{$outfiles_sets->[-1]->[$type_index]},
+				 $suffix);
 			    $cnt++;
 			    next;
 			  }
-			elsif(!defined($suffix) && !$partner_defined &&
+			elsif(!isSuffixDefined($type_index,$suff_index) &&
+			      !$partner_defined &&
 			      isTypeSuffixPrimary($type_index,$suff_index))
 			  {
 			    #When no suffix is supplied, yet the output type is
@@ -10062,8 +10121,23 @@ sub makeCheckOutputs
 		  {
 		    #The stub is added to the new stub set unchanged
 		    #For each suffix available for this file type
-		    foreach my $suffix (@{$suffixes->[$type_index]})
-		      {push(@{$outfiles_sets->[-1]->[$type_index]},undef)}
+		    foreach my $suff_index (0..$#{$suffixes->[$type_index]})
+		      {
+			my $suffix = $suffixes->[$type_index]->[$suff_index];
+			debug({LEVEL => -99},"Suffix is not defined 2.  ",
+			      "Suffix: [",(defined($suffix) ?
+					   $suffix : 'undef'),"].");
+			#If the suffix is not defined, but it is primary, add
+			#STDOUT to the outfile stubs.  Otherwise, the stub set
+			#is not even defined, so add undef, just so we have a
+			#placeholder (i.e. can guarantee that a place exists in
+			#the suffix array for every suffix that was defined by
+			#the programmer)
+			push(@{$outfiles_sets->[-1]->[$type_index]},
+			     (!isSuffixDefined($type_index,$suff_index) &&
+			      isTypeSuffixPrimary($type_index,$suff_index) ?
+			      '-' : undef));
+		      }
 		  }
 	      }
 	  }
@@ -10146,17 +10220,21 @@ sub makeCheckOutputs
 	    keys(%$unique_hash);
 	@report_errs = (@report_errs[0..8],'...')
 	  if(scalar(@report_errs) > 10);
-	error("Output file name conflict(s) detected: [",
-	      join(',',@report_errs),"].  The collision modes [(",
-	      join('),(',map {defined($_) ? join(',',@$_) : 'undef'}
-		   @{$collide_modes}),"})] for ",
-	      "these files is set to cause an error if multiple input files ",
-	      "output to the same output file.  There must be a different ",
-	      "output file name for each combination of input files.  Please ",
-	      "check your input files for duplicates.  This error may be ",
-	      "circumvented by --force and either --overwrite or ",
-	      "--skip-existing, but it is heavily discouraged - only use for ",
-	      "testing.");
+	error("Output file name conflict",
+	      (scalar(@report_errs) > 1 ? 's' : '')," detected: [",
+	      join(',',@report_errs),"].",
+	      {DETAIL =>
+	       join('',("The collision modes [(",
+			join('),(',map {defined($_) ? join(',',@$_) : 'undef'}
+			     @{$collide_modes}),"})] for these files is set ",
+			"to cause an error if multiple input files output to ",
+			"the same output file.  There must be a different ",
+			"output file name for each combination of input ",
+			"files.  Please check your input files for ",
+			"duplicates.  This error may be circumvented by ",
+			"--force and either --overwrite or --skip-existing, ",
+			"but it is heavily discouraged - only use for ",
+			"testing."))});
 	quit(-57);
       }
     #Quit if any of the outfiles created already exist
@@ -10884,10 +10962,10 @@ sub processDefaultOptions
 	quit(-64);
       }
 
-    if(defined($collide_mode) && $collide_mode ne '' &&
-       $collide_mode !~ /^[mer]/i)
+    if(defined($user_collide_mode) && $user_collide_mode ne '' &&
+       $user_collide_mode !~ /^[mer]/i)
       {
-	error("Invalid --collision-mode: [$collide_mode].  Acceptable values ",
+	error("Invalid --collision-mode: [$user_collide_mode].  Acceptable values ",
 	      "are: [merge, rename, or error].  Check usage for an ",
 	      "explanation of what these modes do.");
 	quit(-65);
@@ -10915,7 +10993,7 @@ sub processDefaultOptions
     verbose({LEVEL => 2},'Skip Existing:  [on].')           if($skip_existing);
     verbose({LEVEL => 2},'Append:         [on].')           if($append);
     verbose({LEVEL => 2},"Dry run mode:   [$dry_run].")     if($dry_run);
-    verbose({LEVEL => 2},"Collision mode: [$collide_mode].")if($collide_mode);
+    verbose({LEVEL => 2},"Collision mode: [$user_collide_mode].")if($user_collide_mode);
     verbose({LEVEL => 2},"Error level:    [$error_limit].")
       if($error_limit != $error_limit_default);
   }
@@ -11347,7 +11425,7 @@ sub setDefaults
     if(defined($colmode_def) &&
        ($colmode_def eq 'error' || $colmode_def eq 'merge' ||
 	$colmode_def eq 'rename'))
-      {$collide_mode = $colmode_def}
+      {$def_collide_mode = $colmode_def}
     elsif(defined($colmode_def))
       {
 	error("Invalid COLLISIONMODE value: [$colmode_def].  Must be one of ",
@@ -12350,7 +12428,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.076';
+    $VERSION       = '4.077';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
