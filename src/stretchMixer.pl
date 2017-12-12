@@ -44,7 +44,7 @@ Moore GL, Maranas CD (2000) Modeling DNA mutation and recombination for directed
 He L, Friedman AM, Bailey-Kellogg C (2012) Algorithms for optimizing cross-overs in DNA shuffling. BMC Bioinformatics 13(Suppl 3):S3. doi:10.1186/1471-2105-13-s3-s3
 
 END_DETAIL
-);
+	     );
 
 setDefaults(HEADER        => 0,
 	    ERRLIMIT      => 3,
@@ -134,7 +134,7 @@ END_FORMAT
 		 );
 
 my $seq_out_type =
-  addOutfileOption(GETOPTKEY     => 'o|outfile|output-file=s',
+  addOutfileOption(GETOPTKEY     => 'outfile|output-file=s',
 		   REQUIRED      => 0,
 		   PRIMARY       => 1,
 		   HIDDEN        => 0,
@@ -145,11 +145,14 @@ my $seq_out_type =
 		   PAIR_RELAT    => 'ONETOMANY'
 		  );
 
-my $stretch_mins = [5,11];
+debug("Seq out type ID: [$seq_out_type].");
+
+my $stretch_mins     = [];
+my $stretch_mins_def = [5,11];
 addArrayOption(GETOPTKEY   => 'stretch-min=s',
 	       GETOPTVAL   => $stretch_mins,
 	       REQUIRED    => 0,
-	       DEFAULT     => $stretch_mins,
+	       DEFAULT     => $stretch_mins_def,
 	       HIDDEN      => 0,
 	       INTERPOLATE => 1,
 	       SMRY_DESC   => 'Length of contiguous identity to search & mix.',
@@ -216,9 +219,25 @@ if(scalar(grep {$_ < 2} getFileGroupSizes($seq_file_type)))
     quit(1);
   }
 
+if(scalar(@$stretch_mins) == 0 || scalar(grep {/\D/} @$stretch_mins))
+  {
+    if(scalar(@$stretch_mins) == 0)
+      {@$stretch_mins = @$stretch_mins_def}
+    else
+      {
+	error("Invalid value(s) for --stretch-min: [",
+	      join(' ',@$stretch_mins),"].",
+	      {DETAIL => ('There must be at least 1 value and all values ' .
+			  'must be unsigned integers.')});
+	quit(2);
+      }
+  }
+
 my $codon_data_hash  = {};
 my $matrix_data_hash = {};
 my $input_data_hash  = {}; #->{$ntOutFile} = {CDNHASH => $cuh, DATA => $hash}
+
+verbose("Loading input data.");
 
 #nextFileSet iterates sets of command-line-supplied files processed together
 while(nextFileCombo())
@@ -226,6 +245,13 @@ while(nextFileCombo())
     my $codonUsageFile = getInfile($codon_file_type);
     my $alnFile        = getInfile($seq_file_type);
     my $ntOutFile      = getOutfile($seq_out_type);
+
+    if(!defined($ntOutFile))
+      {
+	debug('Got an undefined outfile.  Replacing with dash, since this is ',
+	      'a primary outfile type.');
+	$ntOutFile = '-';
+      }
 
     #Read in this usage file if we haven't already
     if(defined($codonUsageFile) &&
@@ -261,15 +287,21 @@ while(nextFileCombo())
 
 my $max_size = (sort {$b <=> $a} @$stretch_mins)[0];
 
-foreach my $outfile (keys(%$input_data_hash))
+foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
   {
     my $solution = {};
     #Add segments to the solution starting with the largest segments and going
     #down in size (to squeeze less optimally sized segments in)
     foreach my $size (sort {$b <=> $a} @$stretch_mins)
       {
+	verbose("Doing stretch size: [$size].");
+
 	my $sorted_pair_ids = sortPairIDs($input_data_hash->{$outfile}->{DATA},
 					  $size);
+
+	verbose("Searching [",scalar(@$sorted_pair_ids),"] alignments for ",
+		"the best assortment of identity stretches.");
+
 	$solution = getMaxWeavedSegments($input_data_hash->{$outfile}->{DATA},
 					 $size,
 					 $solution,
@@ -277,15 +309,21 @@ foreach my $outfile (keys(%$input_data_hash))
 					 $max_size,
 					 $input_data_hash->{$outfile}
 					 ->{CDNHASH},
-					 $input_data_hash->{$outfile}
-					 ->{MTXHASH});
+					 1);
       }
+
+    #Keep the last verboseOverMe message on the screen by printing a "\n"
+    print STDERR ("\n");
 
     outputHybrids(generateHybrids($solution,
 				  $input_data_hash->{$outfile}->{DATA},
 				  $input_data_hash->{$outfile}->{CDNHASH},
 				  $input_data_hash->{$outfile}->{MTXHASH}),
 		   $outfile);
+
+    outputStats($solution,
+		$input_data_hash->{$outfile}->{DATA},
+	        $max_size);
   }
 
 
@@ -300,104 +338,6 @@ foreach my $outfile (keys(%$input_data_hash))
 ##
 ## Subroutines...
 ##
-
-#This sub takes the input_data_hash (which I will refer to as the segments
-#object) and tries to select the most non-overlapping segments for inclusion in
-#the final sequence output.
-#DEPRECATED & UNTESTED - After starting this sub, I realized that I needed an implementation that gives me a good answer in a short amount of time, so I appended NOTGREEDY to the name of this sub and rewrote it below.  I don't know if this sub works, but the one below was based on the same design.  It just added alternating regions too.
-sub getMaxWeavedSegmentsNOTGREEDY
-  {
-    my $hash       = $_[0];
-    my $size       = $_[1];
-    my $soln       = $_[2];
-    my $pairs      = $_[3];
-    my $pair_start = defined($_[4]) ? $_[4] : 0; #DO NOT SUPPLY
-    my $pos_start  = defined($_[5]) ? $_[5] : 0; #DO NOT SUPPLY
-    my $best       = {};
-    my $best_score;
-
-    foreach my $pairindex ($pair_start..$#{$pairs})
-      {
-	my $pairid = $pairs->[$pairindex];
-
-	#Arbitrarily (but consistently) select the first seqid from the pair
-	my($seqid1,$seqid2) =
-	  sort {$a cmp $b} keys(%{$hash->{$pairid}->{SEQS}});
-
-	#For each identical segment position (they are already in order)
-	foreach my $index ($pos_start..$#{$hash->{$pairid}->{SEGS}->{$size}
-					  ->{$seqid1}})
-	  {
-	    my $pos1 =
-	      $hash->{$pairid}->{SEGS}->{$size}->{$seqid1}->[$index]->[0];
-	    my $pos2 =
-	      $hash->{$pairid}->{SEGS}->{$size}->{$seqid2}->[$index]->[0];
-
-	    #Determine the coordinates after expansion to include every touched
-	    #codon
-	    my $first_codon_start1 = $pos1 - ($pos1 % 3);
-	    my $last_codon_end1    = ($pos1 + $size - 1) +
-	      (($pos1 + $size - 1) % 3);
-	    my $first_codon_start2 = $pos2 - ($pos2 % 3);
-	    my $last_codon_end2    = ($pos2 + $size - 1) +
-	      (($pos2 + $size - 1) % 3);
-
-	    #If the solution will accept this segment
-	    if(canAddSegment($soln,$seqid1,$seqid2,$pos1,$pos2,
-			     $first_codon_start1,$last_codon_end1,
-			     $first_codon_start2,$last_codon_end2))
-	      {
-		my $new_soln = copySolution($soln);
-
-		#Add this new segment for the first sequence
-		push(@{$new_soln->{$seqid1}},
-		     [$pos1,
-		      $pos1+$size-1,
-		      $first_codon_start1,
-		      $last_codon_end1,
-		      $pairid]);
-
-		#Add this new segment for the second sequence
-		push(@{$new_soln->{$seqid2}},
-		     [$pos2,
-		      $pos2+$size-1,
-		      $first_codon_start2,
-		      $last_codon_end2,
-		      $pairid]);
-
-		#Determine where to start in the next recursion
-		my $next_pair = $pairindex;
-		my $next_pos  = $index + 1;
-		if($next_pos >=
-		   scalar(@{$hash->{$pairid}->{SEGS}->{$size}->{$seqid1}}))
-		  {
-		    $next_pair++;
-		    $next_pos = 0;
-		  }
-
-		#Obtain a candidate solution
-		my($cand);
-		#If we're out of pairs, set the new solution as the one we were
-		#going to send down the recursion (and don't do the recursion)
-		if($next_pair >= scalar(@$pairs))
-		  {$cand = $new_soln}
-		else
-		  {$cand = getMaxWeavedSegmentsNOTGREEDY($hash,$size,$new_soln,
-							 $pairindex,$index)}
-
-		#See if this new candidate solution is better
-		my $cand_score = scoreSolution($cand);
-		if(candidateBetter($cand_score,$best_score))
-		  {
-		    $best_score = $cand_score;
-		    $best       = $cand;
-		  }
-	      }
-	  }
-      }
-
-    return($best);
-  }
 
 #This sub takes the input_data_hash (which I will refer to as the segments
 #object) and tries to select the most non-overlapping segments for inclusion in
@@ -452,22 +392,29 @@ sub getMaxWeavedSegmentsNOTGREEDY
 #                                       segment overlaps.
 sub getMaxWeavedSegments
   {
+    #Might rewrite later because recursion is a resource hog.
+    #http://www.perlmonks.org/?node_id=238938
+    no warnings 'recursion'; #This is recursive, by design.
+
     my $hash         = $_[0];
     my $size         = $_[1];
     my $soln         = $_[2];
     my $pairs        = $_[3];
     my $max_size     = $_[4];
     my $codon_hash   = $_[5];
-    my $pair_least   = (defined($_[6]) ? $_[6] : 0);             #DO NOT SUPPLY
-    my $pair_start   = (defined($_[7]) ? $_[7] : $pair_least);   #BELOW THIS
-    my $region_first = (defined($_[8]) ? $_[8] : [(0) x scalar(@$pairs)]);
-    my $region_start = (defined($_[9]) ? $_[9] : [@$region_first]);
-    my $counts       = (defined($_[10]) ? $_[10] :
+    my $greedy       = (defined($_[6])  ? $_[6]  : 1);
+    my $pair_least   = (defined($_[7])  ? $_[7]  : 0);           #DO NOT SUPPLY
+    my $pair_start   = (defined($_[8])  ? $_[8]  : $pair_least); #BELOW THIS
+    my $region_first = (defined($_[9])  ? $_[9]  : [(0) x scalar(@$pairs)]);
+    my $region_start = (defined($_[10]) ? $_[10] : [@$region_first]);
+    my $counts       = (defined($_[11]) ? $_[11] :
 			[map {[(0) x $hash->{$pairs->[$_]}->{NUMUNIQSEGS}
 			       ->{$size}]}
 			 0..$#{$pairs}]);
-    my $best         = {};
-    my $best_score;
+    my $depth        = (defined($_[12]) ? $_[12] : 0);
+    my $best         = $soln;
+    my $best_score   = scoreSolution($soln,$hash,$max_size);
+    my $greedy_done  = 0;
 
     #While the first pair index still containing segments to try and add to the
     #solution is less than the number of pairs
@@ -475,23 +422,69 @@ sub getMaxWeavedSegments
       {
 	foreach my $curpair ($pair_start..$#{$pairs})
 	  {
-	    my $pairid  = $pairs->[$curpair];
+	    my $pairid = $pairs->[$curpair];
 
 	    #Arbitrarily order the sequence IDs
 	    my($seqid1,$seqid2) =
 	      sort {$a cmp $b} keys(%{$hash->{$pairid}->{SEQS}});
 
 	    my $num_regions =
-	      $hash->{$pairs->[$curpair]}->{NUMUNIQSEGS}->{$size};
+	      $hash->{$pairid}->{NUMUNIQSEGS}->{$size};
 
 	    while($region_first->[$curpair] < $num_regions)
 	      {
 		foreach my $curregion ($region_start->[$curpair]..
-				       $#{$region_start})
+				       ($num_regions - 1))
 		  {
+		    my $num_segs = scalar(@{$hash->{$pairid}->{REGS}->{$size}
+					      ->[$curregion]});
+		    #Current position in the search space = Size of identity,
+		    #the current pair (alternates), the current region of the
+		    #current pair (alternates), and the current segment of the
+		    #current region of the current pair (sequential)
+		    my $sol_size = 0;
+		    foreach my $sk (keys(%$best))
+		      {$sol_size += scalar(grep {$_->{TYPE} eq 'seg'}
+					   @{$best->{$sk}})}
+		    my $num_seq_keys = scalar(keys(%$best));
+		    verboseOverMe("Progress: Depth:$depth size$size:pair",
+				  "$curpair($pair_least-",
+				  (scalar(@$pairs) - 1),"):reg",
+				  "$curregion($region_first->[$curpair]-",
+				  ($num_regions - 1),
+				  "):seg$counts->[$curpair]->[$curregion]/",
+				  (scalar(@{$hash->{$pairs->[$curpair]}->{REGS}
+					      ->{$size}->[$curregion]}) - 1),
+				  " SolnScore:",join(',',@$best_score),
+				  " NumSolSegs:$sol_size");
+
+		    if($counts->[$curpair]->[$curregion] >= $num_segs)
+		      {
+			#While the first region index (with segments yet to be
+			#evaluated) is less than the number of regions and the segment index we are on for that pair/region is larger than the last segment index for that region
+			while($region_first->[$curpair] < $num_regions &&
+			      $counts->[$curpair]
+			      ->[$region_first->[$curpair]] >
+			      $#{$hash->{$pairid}->{REGS}->{$size}
+				 ->[$region_first->[$curpair]]})
+			  {$region_first->[$curpair]++}
+			next;
+		      }
+
+		    debug("Region [$curregion] of [$num_regions] for pair ",
+			  "[$curpair:$pairid], sequences [$seqid1] and ",
+			  "[$seqid2] defined for size [$size]: [",
+			  (defined($hash->{$pairid}->{REGS}->{$size}
+				   ->[$curregion]) ?
+			   'yes' : 'no'),"].\nCounts for this pair/region ",
+			  "are [",(defined($counts->[$curpair]->[$curregion]) ?
+				   'defined' : 'undef'),"].\nThe number of ",
+			  "optimal regions for this alignment at size ",
+			  "[$size] are: ",
+			  "[$hash->{$pairid}->{NUMUNIQSEGS}->{$size}].",
+			  {LEVEL => 2});
 		    #If there are still more segments in this region
-		    if($counts->[$curpair]->[$curregion] <
-		       scalar(@{$hash->{REGS}->{$size}->[$curregion]}))
+		    if($counts->[$curpair]->[$curregion] < $num_segs)
 		      {
 			#The counts keep track of indexes into the segment
 			#indexes contained in each region in the REGS hash.
@@ -501,8 +494,8 @@ sub getMaxWeavedSegments
 			#Each segmentUsing the region segment index, we can
 			#obtain the actual segment index so we can get the
 			#start position of the segment and its spacing score.
-			my $index = $hash->{REGS}->{$size}->[$curregion]
-			  ->[$reg_seg_index];
+			my $index = $hash->{$pairid}->{REGS}->{$size}
+			  ->[$curregion]->[$reg_seg_index];
 
 			my $pos1 = $hash->{$pairid}->{SEGS}->{$size}->{$seqid1}
 			  ->[$index]->[0];
@@ -517,12 +510,16 @@ sub getMaxWeavedSegments
 
 			#Determine the coordinates after expansion to include
 			#every touched codon
-			my $first_codon_start1 = $pos1 - ($pos1 % 3);
-			my $last_codon_end1    = ($pos1 + $size - 1) +
-			  (($pos1 + $size - 1) % 3);
-			my $first_codon_start2 = $pos2 - ($pos2 % 3);
-			my $last_codon_end2    = ($pos2 + $size - 1) +
-			  (($pos2 + $size - 1) % 3);
+			my $first_codon_start1 = $pos1 - (($pos1 - 1) % 3);
+			my $last_iden_pos1     = $pos1 + $size - 1;
+			my $last_codon_end1    = ($last_iden_pos1 +
+						  ($last_iden_pos1 % 3 ? 3 -
+						   ($last_iden_pos1 % 3) : 0));
+			my $first_codon_start2 = $pos2 - (($pos2 - 1) % 3);
+			my $last_iden_pos2     = $pos2 + $size - 1;
+			my $last_codon_end2    = ($last_iden_pos2 +
+						  ($last_iden_pos2 % 3 ? 3 -
+						   ($last_iden_pos2 % 3) : 0));
 
 			my $new_soln = addToSolution($soln,
 						     $pairid,
@@ -537,6 +534,15 @@ sub getMaxWeavedSegments
 						     $hash,
 						     $spc1,$spc2,
 						     $codon_hash);
+
+			$counts->[$curpair]->[$curregion]++;
+
+			while($region_first->[$curpair] < $num_regions &&
+			      $counts->[$curpair]
+			      ->[$region_first->[$curpair]] >
+			      $#{$hash->{$pairid}->{REGS}->{$size}
+				 ->[$region_first->[$curpair]]})
+			  {$region_first->[$curpair]++}
 
 			#If the solution will accept this segment
 			if(defined($new_soln))
@@ -563,7 +569,7 @@ sub getMaxWeavedSegments
 			    $next_reg->[$curpair] = $curregion + 1;
 			    if($next_reg->[$curpair] >= $num_regions)
 			      {$next_reg->[$curpair] =
-				 $region_first->[$next_pair]}
+				 $region_first->[$curpair]}
 
 			    #Obtain a candidate solution
 			    my($cand);
@@ -586,11 +592,14 @@ sub getMaxWeavedSegments
 							     $pairs,
 							     $max_size,
 							     $codon_hash,
+							     $greedy,
 							     $pair_least,
+							     $next_pair,
 							     [@$region_first],
 							     $next_reg,
 							     [map {[@$_]}
-							      @$counts]);
+							      @$counts],
+							     $depth + 1);
 			      }
 
 			    #See if this new candidate solution is better
@@ -602,9 +611,10 @@ sub getMaxWeavedSegments
 				$best_score = $cand_score;
 				$best       = $cand;
 			      }
-			  }
 
-			$counts->[$curpair]->[$curregion]++;
+			    $greedy_done = 1;
+			    last if($greedy && $greedy_done);
+			  }
 		      }
 		  }
 
@@ -612,8 +622,10 @@ sub getMaxWeavedSegments
 		#greater than the segment array's last index (i.e. we are out
 		#of segments to try and add from the first region), increment
 		#the first region index
-		while($counts->[$curpair]->[$region_first->[$curpair]] >
-		      $#{$hash->{REGS}->{$size}->[$region_first->[$curpair]]})
+		while($region_first->[$curpair] < $num_regions &&
+		      $counts->[$curpair]->[$region_first->[$curpair]] >=
+		      scalar(@{$hash->{$pairid}->{REGS}->{$size}
+				 ->[$region_first->[$curpair]]}))
 		  {$region_first->[$curpair]++}
 
 		#This exists to accommodate recursive calls that set
@@ -621,7 +633,11 @@ sub getMaxWeavedSegments
 		#want to go back to the first region with segments in it once
 		#we reach the end of this set of loop iterations
 		$region_start->[$curpair] = $region_first->[$curpair];
+
+		last if($greedy && $greedy_done);
 	      }
+
+	    last if($greedy && $greedy_done);
 	  }
 
 	#While there are more pairs to start from and the first region index
@@ -644,6 +660,8 @@ sub getMaxWeavedSegments
 	#pair with segments in it once we reach the end of this set of loop
 	#iterations
 	$pair_start = $pair_least;
+
+	last if($greedy && $greedy_done);
       }
 
     return($best);
@@ -726,7 +744,7 @@ sub findSegmentInsertPos
     my $iden_start = $_[1];
     my $index = 0;
 
-    if(scalar(@$seg_array) == 0)
+    if(!defined($seg_array) || scalar(@$seg_array) == 0)
       {return($index)}
 
     my $mini = 0;
@@ -737,19 +755,27 @@ sub findSegmentInsertPos
     #pairs), so let's close in on where it is
     while(($maxi - $mini) > 0)
       {
-	#If $i's segment starts to the left of the stop coordinate, move the
-	#left bound right
+	if($i == $mini && $maxi > $mini)
+	  {$i++}
+	elsif($i == $maxi && $maxi > $mini)
+	  {$i--}
+
+	if(($i == $mini || $i == $maxi))
+	  {last}
+
+	#If $i's segment starts to the left of the start coordinate, move the
+	#right bound left
 	if($iden_start < $seg_array->[$i]->{IDEN_START})
 	  {$maxi = $i}
+	#Else if $i's segment starts to the right of the start coordinate, move
+	#the left bound right
 	elsif($iden_start > $seg_array->[$i]->{IDEN_START})
 	  {$mini = $i}
+	#Else $i's segment starts in the same place as the current segment
 	else
 	  {return($i + 1)}
 
 	$i = int(($maxi - $mini) / 2) + $mini;
-
-	if($i == $mini || $i == $maxi)
-	  {last}
       }
 
     if($iden_start > $seg_array->[$mini]->{IDEN_START} &&
@@ -757,12 +783,17 @@ sub findSegmentInsertPos
       {return($maxi)}
     elsif($iden_start < $seg_array->[$mini]->{IDEN_START})
       {return($mini)}
-    elsif($iden_start > $seg_array->[$maxi]->{IDEN_START})
+    elsif($iden_start >= $seg_array->[$maxi]->{IDEN_START})
       {return($maxi + 1)}
+    elsif($iden_start == $seg_array->[$mini]->{IDEN_START})
+      {return($mini + 1)}
     else
       {
 	error("Binary search of a [",scalar(@$seg_array),"] member list ",
-	      "failed for identity start coordinate [$iden_start].");
+	      "failed for identity start coordinate [$iden_start].",
+	      {DETAIL => ("Min/Max segment position thus far: " .
+			  "[$seg_array->[$mini]->{IDEN_START}/" .
+			  "$seg_array->[$maxi]->{IDEN_START}].")});
 	return(undef);
       }
   }
@@ -844,8 +875,8 @@ sub addToSolution
 	       'seg',
 	       undef,
 
-	       undef,
-	       undef,
+	       $first_codon_start1,
+	       $last_codon_stop1,
 
 	       $spacing_score1);
 
@@ -861,8 +892,8 @@ sub addToSolution
 	       'seg',
 	       undef,
 
-	       undef,
-	       undef,
+	       $first_codon_start2,
+	       $last_codon_stop2,
 
 	       $spacing_score2);
 
@@ -980,7 +1011,8 @@ sub getAA
 #to make sure that shared fixed positions are the same and instead just checks
 #that every other codon alternative meets the fixed position criteria of each
 #codon).  This sub requires that both codons encode the same amino acid.  It
-#will error out and return undef if they do not.
+#will error out and return undef if they do not.  If there was no error, but no
+#alternative codon exists to satisfy the requirements, returns an empty string.
 #Globals used: codon hash
 sub reCodeMerge
   {
@@ -993,9 +1025,11 @@ sub reCodeMerge
     #Do a quick error-check to make sure the codons each encode the same AA
     if(getAA($new_codon,$codon_hash) ne getAA($cur_codon,$codon_hash))
       {
+	my $new_aa = getAA($new_codon,$codon_hash);
+	my $cur_aa = getAA($cur_codon,$codon_hash);
 	error("The codons [$new_codon,$cur_codon] from the same sequence ",
 	      "optimized by different alignments do not encode the same ",
-	      "amino acid.  Cannot recode.");
+	      "amino acid [$new_aa,$cur_aa].  Cannot recode.");
 	return(undef);
       }
 
@@ -1009,8 +1043,20 @@ sub reCodeMerge
     foreach my $alt (@$alternates)
       {
 	my $matches = 1;
-	foreach my $new_pos (@$new_fixed_poses)
+	foreach my $new_pos (map {($_ % 3) ? $_ % 3 : 3} @$new_fixed_poses)
 	  {
+	    if($new_pos > length($new_codon))
+	      {
+		error("Position: [$new_pos] is larger than the sequence ",
+		      "length: [",length($new_codon),"].  Cannot recode.");
+		return(undef);
+	      }
+	    elsif($new_pos > length($alt))
+	      {
+		error("Position: [$new_pos] is larger than the sequence ",
+		      "length: [",length($alt),"].  Cannot recode.");
+		return(undef);
+	      }
 	    if(substr($new_codon,$new_pos - 1,1) ne
 	       substr($alt,$new_pos - 1,1))
 	      {
@@ -1019,7 +1065,7 @@ sub reCodeMerge
 	      }
 	  }
 	next if(!$matches);
-	foreach my $cur_pos (@$cur_fixed_poses)
+	foreach my $cur_pos (map {($_ % 3) ? $_ % 3 : 3} @$cur_fixed_poses)
 	  {
 	    if(substr($cur_codon,$cur_pos - 1,1) ne
 	       substr($alt,$cur_pos - 1,1))
@@ -1033,7 +1079,7 @@ sub reCodeMerge
       }
 
     if(scalar(@$choices) == 0)
-      {return(undef)}
+      {return('')}
 
     #We're no longer concerned with degree of homology for this particular
     #codon.  All we want is to satisfy the homology stretches, so the only
@@ -1204,7 +1250,9 @@ sub framesSynced
     my $change_start      = $_[3];
 
     if(length($fixed_partner_seq) != length($change_this_seq))
-      {error("Aligned sequence lengths are not the same.")}
+      {error("Aligned sequence lengths are not the same.",
+	     {DETAIL => ("$fixed_start: $fixed_partner_seq\n" .
+			 "$change_start: $change_this_seq")})}
 
     my $fixed_pos  = $fixed_start  - 1;
     my $change_pos = $change_start - 1;
@@ -1252,7 +1300,7 @@ sub getOverlapSegList
 
     my $list = [];
 
-    if(scalar(keys(%$soln)) == 0)
+    if(scalar(keys(%$soln)) == 0 || !exists($soln->{$seqid}))
       {return($list)}
 
     my $mini = 0;
@@ -1429,8 +1477,18 @@ sub segmentFits
 
 			#If we couldn't select an alternative codon that
 			#satisfies both sequences
-			if(!defined($tmp_codon))
-			  {return(undef)}
+			if(!defined($tmp_codon) || $tmp_codon eq '')
+			  {
+			    if(!defined($tmp_codon))
+			      {error("Could not recode codons for sequence ",
+				     "[$seqid] at (sequence-relative, i.e. ",
+				     "not alignment) positions: ",
+				     "[$first_codon_start,",
+				     "$rec->{FIRST_CODON_START}] (which ",
+				     "should be the same position) in ",
+				     "alignments [$pairid,$rec->{PAIR_ID}].")}
+			    return(undef);
+			  }
 			#Else if an alternative codon was already selected to
 			#match another segment and it differs from what we got
 			#here
@@ -1496,8 +1554,18 @@ sub segmentFits
 
 			#If we couldn't select an alternative codon that
 			#satisfies both sequences
-			if(!defined($tmp_codon))
-			  {return(undef)}
+			if(!defined($tmp_codon) || $tmp_codon eq '')
+			  {
+			    if(!defined($tmp_codon))
+			      {error("Could not recode codons for sequence ",
+				     "[$seqid] at (sequence-relative, i.e. ",
+				     "not alignment) positions: ",
+				     "[",($last_codon_stop - 2),",",
+				     ($rec->{LAST_CODON_STOP} - 2),"] (which ",
+				     "should be the same position) in ",
+				     "alignments [$pairid,$rec->{PAIR_ID}].")}
+			    return(undef);
+			  }
 			#Else if an alternative codon was already selected to
 			#match another segment and it differs from what we got
 			#here
@@ -1561,8 +1629,18 @@ sub segmentFits
 
 			#If we couldn't select an alternative codon that
 			#satisfies both sequences
-			if(!defined($tmp_codon))
-			  {return(undef)}
+			if(!defined($tmp_codon) || $tmp_codon eq '')
+			  {
+			    if(!defined($tmp_codon))
+			      {error("Could not recode codons for sequence ",
+				     "[$seqid] at (sequence-relative, i.e. ",
+				     "not alignment) positions: ",
+				     "[$first_codon_start,",
+				     ($rec->{LAST_CODON_STOP} - 2),"] (which ",
+				     "should be the same position) in ",
+				     "alignments [$pairid,$rec->{PAIR_ID}].")}
+			    return(undef);
+			  }
 			#Else if an alternative codon was already selected to
 			#match another segment and it differs from what we got
 			#here
@@ -1626,8 +1704,18 @@ sub segmentFits
 
 			#If we couldn't select an alternative codon that
 			#satisfies both sequences
-			if(!defined($tmp_codon))
-			  {return(undef)}
+			if(!defined($tmp_codon) || $tmp_codon eq '')
+			  {
+			    if(!defined($tmp_codon))
+			      {error("Could not recode codons for sequence ",
+				     "[$seqid] at (sequence-relative, i.e. ",
+				     "not alignment) positions: ",
+				     "[",($last_codon_stop - 2),",",
+				     "$rec->{FIRST_CODON_START}] (which ",
+				     "should be the same position) in ",
+				     "alignments [$pairid,$rec->{PAIR_ID}].")}
+			    return(undef);
+			  }
 			#Else if an alternative codon was already selected to
 			#match another segment and it differs from what we got
 			#here
@@ -1769,8 +1857,21 @@ sub segmentFits
 #  arbitrarily select a requence to represent a sequence to represent the pair/
 #  alignment, or double the max possible segments number to decide when a pair
 #  has reached its max.
-#2 Sum of deviation distances from ideal spacing - minimize
-#3 Number of bases (times number of sources) included in stretches of any size
+#2 Raw number of unique segments (per sequence) included - not just the weakest
+#  link - maximize
+#3 Int(sqrt()) of the sum of deviation distances (the shortest distance per
+#  region) from the ideal spacing per pair/sequence, normalized by the number
+#  of regions.  Each sequence in each pair has a static number of non-
+#  overlapping identity segments.  Optimal spacing per pair/sequence is even
+#  distribution throughout the sequence length.  For each of the ideal
+#  locations per pair/sequence, the closest identity segment (in that region)
+#  has its distance from the region center used as a score.  All the scores for
+#  each pair/sequence/region are summed.  If no segment is in a region, the
+#  region size is added.  The truncated (e.g. int value) of the square root of
+#  this average distance from the ideal spacing is used for 2 reasons:
+#  succinct display in verbose more and more importantly: So that the next base
+#  score can have more influence over the resulting solution. - minimize
+#4 Number of bases (times number of sources) included in stretches of any size
 #  - maximize
 sub scoreSolution
   {
@@ -1785,12 +1886,14 @@ sub scoreSolution
                           #region center
     my $occupied    = {}; #A hash to count the number of segments included
 
-    my($inclusion_score);
-    my $spacing_score = 0;
-    my $base_score    = 0;
+    my($lowest_inclusion_score);
+    my $total_inclusion_score = 0;
+    my $spacing_score         = 0;
+    my $base_score            = 0;
+    my $num_regs              = 0;
 
     #For each sequence we are constructing
-    foreach my $seqid (keys(%$soln))
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
 	foreach my $subseqrec (grep {$_->{TYPE} eq 'seg'} @{$soln->{$seqid}})
 	  {
@@ -1836,7 +1939,7 @@ sub scoreSolution
       }
 
     #For all possible pairs available
-    foreach my $pairid (keys(%$hash))
+    foreach my $pairid (sort {$a cmp $b} keys(%$hash))
       {
 	## Spacing score calculations
 
@@ -1850,6 +1953,7 @@ sub scoreSolution
 	    foreach my $reg (0..($hash->{$pairid}->{NUMUNIQSEGS}->{$max_size} -
 				 1))
 	      {
+		$num_regs++;
 		if(exists($dist_scores->{$pairid}) &&
 		   exists($dist_scores->{$pairid}->{$seqid}) &&
 		   exists($dist_scores->{$pairid}->{$seqid}->{$reg}))
@@ -1862,16 +1966,13 @@ sub scoreSolution
 	## Inclusion score calculations...
 
 	if(!exists($ubase_sums->{$pairid}))
-	  {
-	    $inclusion_score = 0;
-	    last;
-	  }
+	  {$lowest_inclusion_score = 0}
 	#For each sequence in the pair (Note: the score for each should
 	#technically be the same, so doing it for both here is useless, though
 	#it would be good to do a sanity check here in the future)
-	foreach my $seqid (keys(%{$ubase_sums->{$pairid}}))
+	foreach my $seqid (sort {$a cmp $b} keys(%{$ubase_sums->{$pairid}}))
 	  {
-	    my $cur_size = 0;
+	    my $cur_size            = 0;
 	    my $tmp_inclusion_score = 0;
 	    my($last_pos);
 	    foreach my $pos (sort {$a <=> $b}
@@ -1881,7 +1982,7 @@ sub scoreSolution
 		  {$cur_size++}
 		else
 		  {
-		    #Calculate the number of unique/idependent segments
+		    #Calculate the number of unique/independent segments
 		    my $usegs = int($cur_size / $max_size);
 		    if($usegs > 0)
 		      {$tmp_inclusion_score += $usegs}
@@ -1889,11 +1990,26 @@ sub scoreSolution
 		  }
 		$last_pos = $pos;
 	      }
-	    if($tmp_inclusion_score <
-	       $hash->{$pairid}->{NUMUNIQSEGS}->{$max_size} &&
-	       (!defined($inclusion_score) ||
-		$tmp_inclusion_score < $inclusion_score))
-	      {$inclusion_score = $tmp_inclusion_score}
+
+	    #Calculate the last number of unique/independent segments
+	    my $usegs = int($cur_size / $max_size);
+	    if($usegs > 0)
+	      {$tmp_inclusion_score += $usegs}
+
+	    if(!defined($lowest_inclusion_score) ||
+	       $tmp_inclusion_score < $lowest_inclusion_score)
+	      {
+		if($tmp_inclusion_score >
+		   $hash->{$pairid}->{NUMUNIQSEGS}->{$max_size})
+		  {error("The number of unique segments included in the ",
+			 "solution: [$tmp_inclusion_score] is larger ",
+			 "than the max possible calculated earlier: ",
+			 "[$hash->{$pairid}->{NUMUNIQSEGS}->{$max_size}].  ",
+			 "This should not have happened.  There must be a ",
+			 "bug somewhere in the code.")}
+		$lowest_inclusion_score = $tmp_inclusion_score;
+	      }
+	    $total_inclusion_score += $tmp_inclusion_score;
 	  }
       }
 
@@ -1903,7 +2019,16 @@ sub scoreSolution
       {foreach my $seqid (keys(%{$occupied->{$pairid}}))
 	 {$base_score += scalar(keys(%{$occupied->{$pairid}->{$seqid}}))}}
 
-    push(@$score_obj,$inclusion_score,$spacing_score,$base_score);
+    ## Normalize the spacing score by the number of total regions in all pairs/
+    ## sequences
+
+    $spacing_score /= $num_regs;
+    #Take the square root and runcate both for display and so that base score
+    #has more influence
+    $spacing_score = int(sqrt($spacing_score));
+
+    push(@$score_obj,$lowest_inclusion_score,$total_inclusion_score,
+	 $spacing_score,$base_score);
 
     return(wantarray ? @$score_obj : $score_obj);
   }
@@ -1913,10 +2038,13 @@ sub candidateBetter
     my $cand = $_[0];
     my $best = $_[1];
 
-    if($cand->[0] > $best->[0] ||
-       ($cand->[0] == $best->[0] && $cand->[1] < $best->[1]) ||
+    if(!defined($best) || scalar(@$best) < 4 ||
+       $cand->[0] > $best->[0] ||
+       ($cand->[0] == $best->[0] && $cand->[1] > $best->[1]) ||
        ($cand->[0] == $best->[0] && $cand->[1] == $best->[1] &&
-	$cand->[2] > $best->[2]))
+	$cand->[2] < $best->[2]) ||
+       ($cand->[0] == $best->[0] && $cand->[1] == $best->[1] &&
+	$cand->[2] == $best->[2] && $cand->[3] > $best->[3]))
       {return(1)}
 
     return(0);
@@ -1930,71 +2058,94 @@ sub generateHybrids
     my $usage  = $_[2];
     my $matrix = $_[3];
 
-    $soln = reduceSolution($soln);
+    verbose("Reducing solution...");
+
+    $soln = reduceSolutionPerPair($soln);
+
+    $soln = reduceSolutionBetweenPairs($soln);
+
+    verbose("Merging solution coordinates...");
 
     $soln = updateFinalCoords($soln,$data);
 
+    #Get the alignments each sequence is involved in, to be used as a reference
+    #when constructing the map of how each sequence should be composed (i.e.
+    #defining which alignment each portion of the sequence should come from, or
+    #which partner sequence it should be recoded to best match).
     my $partners_hash = getPartnersHash($soln,$data);
 
+    verbose("Expanding solution coordinates...");
+
+    #Now generate the map of where each portion of the sequences should come
+    #from, or be based on (for recoding to match a portion of a sequence that
+    #was optimized for identity with another sequence)
     my $map = getFilledMap($soln,$data,$partners_hash);
 
-    my $woven_seqs = weaveSeqs($map,$data,$partners_hash,$matrix,$usage);
+    verbose("Building solution sequences...");
+
+    my $woven_seqs = weaveSeqs($map,$data,$partners_hash,$matrix,$usage,$soln);
 
     return($woven_seqs);
   }
 
-#Merges overlapping segments derived from the same pair
-sub reduceSolution
+#Merges overlapping segments derived from the same pair by extending a single
+#record to represent an entire area of overlap
+sub reduceSolutionPerPair
   {
     my $soln = $_[0];
     my $new_soln = {};
-    foreach my $seqid (keys(%$soln))
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
-	my @current = ();
+	my @ovlp_buffer = ();
 	foreach my $currec (@{$soln->{$seqid}})
 	  {
 	    #Add any previous records that no longer overlap the current record
-	    #to the new solution or else add them to the tmpcurrent array.  It
+	    #to the new solution or else add them to the tmp_ovlp_buffer.  It
 	    #is assumed that the records are in order of IDEN_START, and that
 	    #that's always less than (or equal to) IDEN_STOP (and
-	    #LAST_STOP_CODON.  We're also assuming that FIRST_START_CODON
+	    #LAST_CODON_STOP.  We're also assuming that FIRST_CODON_START
 	    #overlaps IDEN_START.  So once the IDEN_START is past
 	    #LAST_CODON_STOP, then there is no more overlap with that record,
 	    #thus we can add it to the reduced solution.
-	    my @tmpcurrent = ();
-	    foreach my $lastrec (@current)
+	    #Note: Nothing in the ovlp_buffer overlaps (except alternate codons
+	    #which we are ignoring), because it has been explicitly edited to
+	    #not do so.  It represents segments that did overlap, but they are
+	    #kept here to see if they will overlap the next record
+	    my @tmp_ovlp_buffer = ();
+	    foreach my $lastrec (@ovlp_buffer)
 	      {
 		#If we have gone past this "last" record, it's good to add
 		if($lastrec->{LAST_CODON_STOP} < $currec->{FIRST_CODON_START})
 		  {push(@{$new_soln->{$seqid}},$lastrec)}
 		else
-		  {push(@tmpcurrent,$lastrec)}
+		  {push(@tmp_ovlp_buffer,$lastrec)}
 	      }
-	    @current = @tmpcurrent;
+	    @ovlp_buffer = @tmp_ovlp_buffer;
 
-	    #If there are no remaining records in the current array or if this
+	    #If there are no remaining records in the ovlp_buffer or if this
 	    #is an alternate codon (which does not get merged with other
-	    #records), add this record to the current array
-	    if(scalar(@current) == 0 || $currec->{TYPE} eq 'alt')
-	      {push(@current,{%$currec})}
+	    #records), add this record to the ovlp_buffer
+	    if(scalar(@ovlp_buffer) == 0 || $currec->{TYPE} eq 'alt')
+	      {push(@ovlp_buffer,{%$currec})}
 	    else
 	      {
 		my $add = 1;
-		#The remaining records all overlap.  Search through them to
-		#find the one from the same pair source and edit its record to
-		#extend the stops (unless one from the same pair doesn't exist
-		#- then "$add" it to the current array as its own thing to be
-		#searched for overlap on the next iteration)
+		#The remaining records all overlap the current record being
+		#added.  Search through them to find the one from the same pair
+		#source and edit its record to extend the stops (unless one
+		#from the same pair doesn't exist - then "$add" it to the
+		#ovlp_buffer as its own thing to be searched for overlap on the
+		#next iteration)
 		foreach my $lastrec (grep {$_->{TYPE} eq 'seg' &&
 					     $currec->{IDEN_STOP} >
 					       $_->{IDEN_STOP} &&
 						 $_->{PAIR_ID} eq
 						   $currec->{PAIR_ID}}
-				     @current)
+				     @ovlp_buffer)
 		  {
-		    $lastrec->{IDEN_STOP} = $currec->{IDEN_STOP};
+		    $lastrec->{IDEN_STOP}       = $currec->{IDEN_STOP};
 		    $lastrec->{LAST_CODON_STOP} = $currec->{LAST_CODON_STOP};
-		    $lastrec->{FINALN_STOP} = $currec->{FINAL_STOP};
+		    $lastrec->{FINAL_STOP}      = $currec->{FINAL_STOP};
 		    #Keep the score of the better placed piece of identity
 		    if($currec->{SPACING_SCORE} < $lastrec->{SPACING_SCORE})
 		      {$lastrec->{SPACING_SCORE} = $currec->{SPACING_SCORE}}
@@ -2002,12 +2153,169 @@ sub reduceSolution
 		    last;
 		  }
 		if($add)
-		  {push(@current,{%$currec})}
+		  {push(@ovlp_buffer,{%$currec})}
 	      }
 	  }
-	#All the records have been traversed.  Anything left in @current can be
-	#added to the reduced solution
-	push(@{$new_soln->{$seqid}},@current);
+	#All the records have been traversed.  Anything left in @ovlp_buffer
+	#can be added to the reduced solution
+	push(@{$new_soln->{$seqid}},@ovlp_buffer);
+      }
+
+    return($new_soln);
+  }
+
+#Eliminates overlap between segments of the same sequence, but derived from
+#different pairs by either removing whole records that are completely
+#overlapped or by adjusting their coordinates by shrinking them inward.
+#Reductions are done by codon boundaries.
+sub reduceSolutionBetweenPairs
+  {
+    my $soln = $_[0];
+    my $new_soln = {};
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
+      {
+	#This should really be fixed elsewhere.  FINAL_START and FINAL_STOP
+	#should be defined from the beginning
+	foreach my $rec (@{$soln->{$seqid}})
+	  {
+	    if(!defined($rec->{FINAL_START}))
+	      {$rec->{FINAL_START} = $rec->{FIRST_CODON_START}}
+	    if(!defined($rec->{FINAL_STOP}))
+	      {$rec->{FINAL_STOP} = $rec->{LAST_CODON_STOP}}
+	  }
+	my @ovlp_buffer = ();
+	foreach my $oldrec (sort {$a->{FINAL_START} <=> $b->{FINAL_START}}
+			    @{$soln->{$seqid}})
+	  {
+	    #Copy the soln record
+	    my $currec = {%$oldrec};
+	    if(!exists($currec->{FINAL_START}) ||
+	       !defined($currec->{FINAL_START}))
+	      {$currec->{FINAL_START} = $currec->{FIRST_CODON_START}}
+	    if(!exists($currec->{FINAL_STOP}) ||
+	       !defined($currec->{FINAL_STOP}))
+	      {$currec->{FINAL_STOP} = $currec->{LAST_CODON_STOP}}
+
+	    #Add any previous records that no longer overlap the current record
+	    #to the new solution or else add them to the tmp_ovlp_buffer.  It
+	    #is assumed that the records are in order of IDEN_START, and that
+	    #that's always less than (or equal to) IDEN_STOP (and
+	    #LAST_CODON_STOP.  We're also assuming that FIRST_CODON_START
+	    #overlaps IDEN_START.  So once the IDEN_START is past
+	    #LAST_CODON_STOP, then there is no more overlap with that record,
+	    #thus we can add it to the reduced solution.
+	    #Note: Nothing in the ovlp_buffer overlaps (except alternate codons
+	    #which we are ignoring), because it has been explicitly edited to
+	    #not do so.  It represents segments that did overlap, but they are
+	    #kept here to see if they will overlap the next record
+	    my @tmp_ovlp_buffer = ();
+	    foreach my $lastrec (@ovlp_buffer)
+	      {
+		#If we have gone past this "last" record, it's good to add
+		if($lastrec->{FINAL_START} < $currec->{FINAL_STOP})
+		  {push(@{$new_soln->{$seqid}},$lastrec)}
+		else
+		  {push(@tmp_ovlp_buffer,$lastrec)}
+	      }
+	    @ovlp_buffer = @tmp_ovlp_buffer;
+
+	    #If there are no remaining records in the ovlp_buffer or if this
+	    #is an alternate codon (which does not get merged with other
+	    #records), add this record to the ovlp_buffer
+	    if(scalar(@ovlp_buffer) == 0 || $currec->{TYPE} eq 'alt')
+	      {push(@ovlp_buffer,$currec)}
+	    else
+	      {
+		my @lastrecs =
+		  sort {$a->{FINAL_STOP} <=> $b->{FINAL_STOP}}
+		    grep {$_->{TYPE} eq 'seg' &&
+			    $currec->{FINAL_STOP} > $_->{FINAL_STOP}}
+		      @ovlp_buffer;
+		my $add = 1;
+
+		if(scalar(@lastrecs) == 0)
+		  {
+		    push(@ovlp_buffer,$currec);
+		    next;
+		  }
+		#The remaining records all overlap the current record being
+		#added.  Search through them to find the one from the same pair
+		#source and edit its record to adjust the starts and stops
+		#(unless an overlap of type seg doesn't exist - then "$add" it
+		#to the #ovlp_buffer as its own thing to be searched for
+		#overlap on the next iteration)
+		my $lastrec = $lastrecs[-1];
+
+		##
+		## The point here is to figure out:
+		## 1. Whether we will add or skip the current record to the
+		##    overlap buffer,
+		## 2. whether we should trim back the end of the last
+		##    lastrec (which could be necessary so that the
+		##    identity of what's being added will be used instead
+		##    of any extra non-identity codon bases in the last
+		##    lastrec) (it's assumed that the last lastrec is the
+		##    one that will be adjusted), and
+		## 3. how much we need to increase the start of the record
+		##    being added to not have any final overlap
+		##
+
+		#If the end of the segment being added is overlapping
+		#anything previously added (complete overlap is assumed
+		#because we're guaranteed to have a start overlap and
+		#everything should be contiguous), don't add it and stop
+		if($currec->{FINAL_STOP} <= $lastrec->{FINAL_STOP})
+		  {
+		    $add = 0;
+		    next;
+		  }
+
+		#Determine the last base of the previously added record
+		#that we are definitely going to keep, which is the last
+		#frame 3 position of identity.  Everything else will either
+		#be identical to the overlapping thing being added or will
+		#get replaced by an alt codon
+		my $last_keep_to = $lastrec->{FINAL_STOP};
+		if($last_keep_to > $lastrec->{IDEN_STOP})
+		  {$last_keep_to -= 3}
+		while($currec->{FINAL_START} <= $last_keep_to)
+		  {$currec->{FINAL_START} += 3}
+
+		#If the current record is no longer valid or no longer
+		#contains any identity
+		if($currec->{FINAL_START} > $currec->{FINAL_STOP} ||
+		   $currec->{FINAL_START} > $currec->{IDEN_STOP})
+		  {
+		    $add = 0;
+		    next;
+		  }
+		else
+		  {
+		    #If we adjusted the the end of the lastrec temporarily,
+		    #we adjusted the start of the current record being
+		    #added, make the adjustment to the last rec permanent.
+		    #We will assume that this will only happen to the last
+		    #lastrec, ordered by final start
+		    if(($last_keep_to + 3) ==
+		       $lastrec->{LAST_CODON_STOP} &&
+		       $currec->{FINAL_START} !=
+		       $currec->{FIRST_CODON_START} &&
+		       ($last_keep_to + 1) == $currec->{FINAL_START})
+		      {
+			if($last_keep_to + 1 != $currec->{FINAL_START} ||
+			   $currec->{FINAL_START} % 3 != 1)
+			  {error("Internal error: Bad frame boundary.  This ",
+				 "should not have happened.")}
+			$lastrec->{FINAL_STOP} = $last_keep_to;
+		      }
+		  }
+		if($add)
+		  {push(@ovlp_buffer,$currec)}
+	      }
+	  }
+	#All the records have been traversed.  Anything left in @ovlp_buffer
+	#can be added to the reduced solution
+	push(@{$new_soln->{$seqid}},@ovlp_buffer);
       }
 
     return($new_soln);
@@ -2029,14 +2337,15 @@ sub updateFinalCoords
     my $data     = $_[1];
     my $new_soln = {};
 
-    foreach my $seqid (keys(%$soln))
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
 	my @current = ();
 	#For each segment record (in order of ascending IDEN_START)
 	foreach my $currec (@{$soln->{$seqid}})
 	  {
 	    #Error-check to make sure that the FINAL values are fresh
-	    if($currec->{FIRST_CODON_START} != $currec->{FINAL_START})
+	    if(!defined($currec->{FINAL_START}) ||
+	       $currec->{FIRST_CODON_START} != $currec->{FINAL_START})
 	      {
 		warning("Final start coordinate has an unexpected value.  ",
 			"Resetting.",
@@ -2045,10 +2354,12 @@ sub updateFinalCoords
 				   "once on a solution.  It expects the ",
 				   "final start and stop to be the same as ",
 				   "the first codon start and the last codon ",
-				   "stop."))});
+				   "stop."))})
+		  if(defined($currec->{FINAL_STOP}));
 		$currec->{FINAL_START} = $currec->{FIRST_CODON_START};
 	      }
-	    if($currec->{LAST_CODON_STOP} != $currec->{FINAL_STOP})
+	    if(!defined($currec->{FINAL_STOP}) ||
+	       $currec->{LAST_CODON_STOP} != $currec->{FINAL_STOP})
 	      {
 		warning("Final stop coordinate has an unexpected value.  ",
 			"Resetting.",
@@ -2057,7 +2368,8 @@ sub updateFinalCoords
 				   "once on a solution.  It expects the ",
 				   "final start and stop to be the same as ",
 				   "the first codon start and the last codon ",
-				   "stop."))});
+				   "stop."))})
+		  if(defined($currec->{FINAL_STOP}));
 		$currec->{FINAL_STOP} = $currec->{LAST_CODON_STOP};
 	      }
 
@@ -2065,7 +2377,7 @@ sub updateFinalCoords
 	    #to the new solution or else add them to the tmpcurrent array.  It
 	    #is assumed that the records are in order of IDEN_START, and that
 	    #that's always less than (or equal to) IDEN_STOP (and
-	    #LAST_STOP_CODON.  We're also assuming that FIRST_START_CODON
+	    #LAST_CODON_STOP.  We're also assuming that FIRST_CODON_START
 	    #overlaps IDEN_START.  So once the IDEN_START is past
 	    #LAST_CODON_STOP, then there is no more overlap with that record,
 	    #thus we can add it to the reduced solution.
@@ -2093,12 +2405,16 @@ sub updateFinalCoords
 		  {
 		    #Only look at records that overlap.  Some may have been
 		    #adjusted and can be skipped
-		    unless(($currec->{FINAL_START} >= $_->{FINAL_START} &&
-			    $currec->{FINAL_START} <= $_->{FINAL_STOP}) ||
-			   ($currec->{FINAL_STOP}  >= $_->{FINAL_START} &&
-			    $currec->{FINAL_STOP}  <= $_->{FINAL_STOP}) ||
-			   ($currec->{FINAL_START} <  $_->{FINAL_START} &&
-			    $currec->{FINAL_STOP}  >  $_->{FINAL_STOP}))
+		    unless(($currec->{FINAL_START} >=
+			    $lastrec->{FINAL_START} &&
+			    $currec->{FINAL_START} <=
+			    $lastrec->{FINAL_STOP}) ||
+			   ($currec->{FINAL_STOP}  >=
+			    $lastrec->{FINAL_START} &&
+			    $currec->{FINAL_STOP}  <=
+			    $lastrec->{FINAL_STOP}) ||
+			   ($currec->{FINAL_START} < $lastrec->{FINAL_START} &&
+			    $currec->{FINAL_STOP}  > $lastrec->{FINAL_STOP}))
 		      {next}
 
 		    #If lastrec is an alternate codon (and currec is not)
@@ -2261,8 +2577,8 @@ sub clipSegments
 		#If there is current overlap
 		if($seg2->{FINAL_START} <= $seg1->{FINAL_STOP})
 		  {
-		    $seg1->{FINAL_STOP}  = $seg1->{IDEN_STOP};
-		    $seg2->{FINAL_START} = $seg1->{IDEN_STOP} + 1;
+		    $seg1->{FINAL_STOP}  = $seg1->{LAST_CODON_STOP} - 3;
+		    $seg2->{FINAL_START} = $seg2->{LAST_CODON_STOP} - 2;
 		  }
 	      }
 
@@ -2301,8 +2617,8 @@ sub clipSegments
 		#If there is current overlap
 		if($seg2->{FINAL_START} <= $seg1->{FINAL_STOP})
 		  {
-		    $seg1->{FINAL_STOP}  = $seg1->{IDEN_STOP};
-		    $seg2->{FINAL_START} = $seg1->{IDEN_STOP} + 1;
+		    $seg1->{FINAL_STOP}  = $seg1->{LAST_CODON_STOP} - 3;
+		    $seg2->{FINAL_START} = $seg1->{LAST_CODON_STOP} - 2;
 		  }
 	      }
 
@@ -2332,8 +2648,8 @@ sub clipSegments
 		#If there is current overlap
 		if($seg2->{FINAL_START} <= $seg1->{FINAL_STOP})
 		  {
-		    $seg1->{FINAL_STOP}  = $seg1->{IDEN_STOP};
-		    $seg2->{FINAL_START} = $seg1->{IDEN_STOP} + 1;
+		    $seg1->{FINAL_STOP}  = $seg1->{LAST_CODON_STOP} - 3;
+		    $seg2->{FINAL_START} = $seg1->{LAST_CODON_STOP} - 2;
 		  }
 	      }
 
@@ -2347,14 +2663,13 @@ sub clipSegments
 	elsif($seg2->{FIRST_CODON_START} == ($seg1->{LAST_CODON_STOP} - 2))
 	  {
 	    #We will assume that in any case, the codon will be fixed by an
-	    #alternate codon if there's a conflict, so we'll just end the final
-	    #stop of seg1 just before the identity start of seg2
+	    #alternate codon if there's a conflict, so we'll just clean up the
+	    #ends to not overlap
 
 	    #If there is current overlap
 	    if($seg2->{FINAL_START} <= $seg1->{FINAL_STOP})
 	      {
-		$seg1->{FINAL_STOP}  = $seg2->{IDEN_START} - 1;
-		$seg2->{FINAL_START} = $seg1->{IDEN_START};
+		$seg2->{FINAL_START} = $seg2->{FIRST_CODON_START} + 3;
 	      }
 	  }
 	#else if seg2 last  codon stop  overlaps seg1 first codon start
@@ -2390,8 +2705,8 @@ sub clipSegments
 		#If there is current overlap
 		if($seg2->{FINAL_START} <= $seg1->{FINAL_STOP})
 		  {
-		    $seg1->{FINAL_STOP}  = $seg1->{IDEN_STOP};
-		    $seg2->{FINAL_START} = $seg1->{IDEN_STOP} + 1;
+		    $seg1->{FINAL_STOP}  = $seg1->{LAST_CODON_STOP} - 3;
+		    $seg2->{FINAL_START} = $seg1->{LAST_CODON_STOP} - 2;
 		  }
 	      }
 
@@ -2418,6 +2733,8 @@ sub getFilledMap
     my $soln      = $_[0];
     my $data      = $_[1];
     my $part_hash = $_[2];
+
+    verbose("Selecting identity segment midpoints...");
 
     #Locate all the midpoints between which the sequence sources change
     #This will save the direct sources.  Indirect sources will be undefined
@@ -2446,7 +2763,7 @@ sub setMapDividers
     my $part_hash = $_[2];
     my $div_map   = {};
 
-    foreach my $seqid (keys(%$soln))
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
 	my $lastind = -1;
 	my $cnt     = 0;
@@ -2458,16 +2775,21 @@ sub setMapDividers
 	foreach my $pseudoind (@ordered_indexes)
 	  {
 	    my $recind  = $ordered_indexes[$pseudoind];
-	    my $nextind = (($pseudoind + 1) > $#ordered_indexes ?
-			   undef : $ordered_indexes[$pseudoind + 1]);
 	    my $rec     = $soln->{$seqid}->[$recind];
+
+	    if(!defined($rec->{FINAL_STOP}))
+	      {error("FINAL_STOP NOT DEFINED IN THE FOLLOWING HASH: [",
+		     join(', ',map {"$_ => $rec->{$_}"} keys(%$rec)),"].")}
+
+	    verboseOverMe("Determining midpoint boundaries of ",
+			  "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]");
 
 	    #Obtain all the pair IDs and Sequence IDs of all the sequences that
 	    #$seqid has been aligned with
 	    my $partners = $part_hash->{$seqid};
 
 	    #Using the partner coordinates relative to this FINAL_START,
-	    #look for a any segment to the left among the partner sequences
+	    #look for any segment to the left among the partner sequences
 	    #this sequence has been paired with.  If any exists, use the
 	    #closest one's FINAL_STOP to determine this sequence's relative
 	    #coord.  Then determine a mid-point on a codon boundary and
@@ -2488,20 +2810,43 @@ sub setMapDividers
 	    #check it for a conflict before recording it
 	    if(exists($div_map->{$seqid}) &&
 	       exists($div_map->{$seqid}->{$divider_left}) &&
+	       defined($div_map->{$seqid}->{$divider_left}->{TYPE}) &&
 	       $div_map->{$seqid}->{$divider_left}->{TYPE} eq 'SOURCE' &&
 	       $div_map->{$seqid}->{$divider_left}->{PAIR_ID} ne
 	       $rec->{PAIR_ID})
-	      {error("Sequence [$seqid] starting at ",
-		     "[$divider_left] has a conflict between alignments [",
+	      {debug("Sequence [$seqid] has multiple source alignments: [",
 		     $div_map->{$seqid}->{$divider_left}->{PAIR_ID},
-		     "] and [$rec->{PAIR_ID}].  Unable to encode ",
-		     "segment from alignment [$rec->{PAIR_ID}].")}
+		     "] and [$rec->{PAIR_ID}].  Both alignments are marked ",
+		     "as being the source for a divider starting left of an ",
+		     "identity segment at sequence-relative position [$seqid:",
+		     "segment:$rec->{FINAL_START} divider:$divider_left].  ",
+		     "Ignoring alignment [$rec->{PAIR_ID}].  This should be ",
+		     "checked manually to confirm that their identity ",
+		     "segments are encoded the same in both alignments.  ",
+		     "Even though completely overlapping redundant identical ",
+		     "segments were aribtrarily removed from a sequence that ",
+		     "was aligned independently with 2 other sequences, the ",
+		     "segments still exist in the partners, which will ",
+		     "trigger the copying of the same divider (from ",
+		     "different sources) to the common sequence record - and ",
+		     "is OK - as long as it's confirmed that this is what's ",
+		     "happening.  One possible complication is if the ",
+		     "identity in one pair is larger than in the other ",
+		     "pair.  The other pair's segment would have been ",
+		     "eliminated (since it was completely overlapping) and ",
+		     "its partner would copy a unique divider at its start ",
+		     "and 1 after the stop, changing the source ",
+		     "unnecessarily, but since they MUST be identical ",
+		     "anyway, it only results in making it more complicated ",
+		     "than it needs to be.",{LEVEL => 3})}
 	    else
-	      {$div_map->{$seqid}->{$divider_left} =
-		 {PAIR_ID => $rec->{PAIR_ID},
-		  TYPE    => 'SOURCE',
-		  STOP    => undef,
-		  SEQ     => ''}}
+	      {
+		$div_map->{$seqid}->{$divider_left} =
+		  {PAIR_ID => $rec->{PAIR_ID},
+		   TYPE    => 'SOURCE',
+		   STOP    => undef,
+		   SEQ     => ''};
+	      }
 
 	    #Copy this divider to the partner sequences
 	    copyDivider($divider_left,
@@ -2509,7 +2854,28 @@ sub setMapDividers
 			$div_map,
 			$partners,
 			$data,
-			$rec->{PAIR_ID});
+			$rec->{PAIR_ID},
+		        'left');
+
+	    #Check to make sure that the very beginning of the sequence is
+	    #accounted for, because a divider could have been copied over and
+	    #interrupted the sequence from ever having a divider at the
+	    #beginning
+	    if($pseudoind == 0 && $divider_left != 1)
+	      {
+		debug("Creating UNDEF left edge divider [1] (in addition to ",
+		      "divider [$divider_left]) for [$seqid] as a part of ",
+		      "alignment [$rec->{PAIR_ID}].  This shouldn't (but ",
+		      "might) be responsible for Ns at the beginning of the ",
+		      "sequence.");
+		$div_map->{$seqid}->{1} =
+		  {PAIR_ID => $rec->{PAIR_ID},
+		   TYPE    => undef,
+		   STOP    => undef,
+		   SEQ     => ''}
+		#No need to copy it, because it's not real.  It's just a place-
+		#holder that could get copied over.
+	      }
 
 	    #Using the partner coordinates relative to this FINAL_STOP,
 	    #look for a any segment to the right among the partner
@@ -2534,20 +2900,41 @@ sub setMapDividers
 	    #check it for a conflict before recording it
 	    if(exists($div_map->{$seqid}) &&
 	       exists($div_map->{$seqid}->{$divider_right}) &&
+	       defined($div_map->{$seqid}->{$divider_right}->{TYPE}) &&
 	       $div_map->{$seqid}->{$divider_right}->{TYPE} eq 'SOURCE' &&
 	       $div_map->{$seqid}->{$divider_right}->{PAIR_ID} ne
 	       $rec->{PAIR_ID})
-	      {error("Sequence [$seqid] starting at ",
-		     "[$divider_right] has a conflict between alignments [",
+	      {debug("Sequence [$seqid] has multiple source alignments [",
 		     $div_map->{$seqid}->{$divider_right}->{PAIR_ID},
-		     "] and [$rec->{PAIR_ID}].  Unable to encode ",
-		     "segment from alignment [$rec->{PAIR_ID}].")}
+		     "] and [$rec->{PAIR_ID}].  Both alignments are marked ",
+		     "as being the source for a divider starting right of an ",
+		     "identity segment at sequence-relative position [$seqid:",
+		     "segment:$rec->{FINAL_STOP} divider:$divider_right].  ",
+		     "Ignoring alignment [$rec->{PAIR_ID}].  This should be ",
+		     "checked manually to confirm that their identity ",
+		     "segments are encoded the same in both alignments.  ",
+		     "Even though completely overlapping redundant identical ",
+		     "segments were aribtrarily removed from a sequence that ",
+		     "was aligned independently with 2 other sequences, the ",
+		     "segments still exist in the partners, which will ",
+		     "trigger the copying of the same divider (from ",
+		     "different sources) to the common sequence record - and ",
+		     "is OK - as long as it's confirmed that this is what's ",
+		     "happening.  One possible complication is if the ",
+		     "identity in one pair is larger than in the other ",
+		     "pair.  The other pair's segment would have been ",
+		     "eliminated (since it was completely overlapping) and ",
+		     "its partner would copy a unique divider at its start ",
+		     "and 1 after the stop, changing the source ",
+		     "unnecessarily, but since they MUST be identical ",
+		     "anyway, it only results in making it more complicated ",
+		     "than it needs to be.",{LEVEL => 3})}
 	    else
 	      {$div_map->{$seqid}->{$divider_right} =
 		 {PAIR_ID => $rec->{PAIR_ID},
-		  TYPE    => 'SOURCE',
-		  STOP    => undef,
-		  SEQ     => ''}}
+		  TYPE    => undef,  #Don't know seg this belongs to yet, so
+		  STOP    => undef,  #allow it to be over-written with another
+		  SEQ     => ''}}    #pair's copy by setting as undef
 
 	    #Copy this divider to the partner sequences
 	    copyDivider($divider_right,
@@ -2555,7 +2942,31 @@ sub setMapDividers
 			$div_map,
 			$partners,
 			$data,
-			$rec->{PAIR_ID});
+			$rec->{PAIR_ID},
+		        'right');
+
+	    #Check to make sure that the very end of the sequence is accounted
+	    #for, because a divider could have been copied over and interrupted
+	    #the sequence from ever having a divider at the end (or rather, one
+	    #past the end - the way it was coded to work)
+	    if($pseudoind == $#ordered_indexes &&
+	       $divider_right != length($data->{$rec->{PAIR_ID}}->{SEQS}
+					->{$seqid}) + 1)
+	      {
+		my $dr =
+		  length($data->{$rec->{PAIR_ID}}->{SEQS}->{$seqid}) + 1;
+		debug("Creating UNDEF right divider [$dr] for [$seqid] as a ",
+		      "part of alignment [$rec->{PAIR_ID}] because the last ",
+		      "divider [$divider_right] was not the sequence length ",
+		      "+ 1 [$dr].",{LEVEL => 3});
+		$div_map->{$seqid}->{$dr} =
+		  {PAIR_ID => $rec->{PAIR_ID},
+		   TYPE    => undef,
+		   STOP    => undef,
+		   SEQ     => ''}
+		#No need to copy it, because it's not real.  It's just a place-
+		#holder that could get copied over.
+	      }
 
 	    $lastind = $recind;
 	    $cnt++;
@@ -2580,6 +2991,14 @@ sub getClosestLeftDivider
     my $closest = 0;
     foreach my $partner (@$partners)
       {
+	if($seqid eq $partner->[1])
+	  {
+	    error("Encountered sequence [$seqid] aligned with itself.",
+		  {DETAIL => ("NOTE: The partners array may have been " .
+			      "improperly constructed.")});
+	    next;
+	  }
+
 	#Convert the coordinate to the partner sequence
 	my $partner_coord = convertDivider($seqid,
 					   $coord,
@@ -2599,14 +3018,51 @@ sub getClosestLeftDivider
 						 $seqid,
 						 $data);
 
-	#If this coordinate is closer, save it.
+	#This is intended to correct for end-gaps in the alignment and is
+	#designed around the case where the query coord ($coord) is 1.  When
+	#it's converted to the partner and aligns to something other than the
+	#first base, the convert divider method is designed to return its first
+	#base (accounting for the starting gap in the partner (i.e. all the
+	#bases in the query sequence aligning with the starting gap return base
+	#1 in the partner)).  But, in that scenario, when you convert back, it
+	#returns the actual aligned base from the query sequence (e.g. base
+	#16).  This catches that case and changes it back to 1.
+	if($partner_coord == $part_left_seg_coord &&
+	   $orig_left_seg_coord > $coord)
+	  {$orig_left_seg_coord = $coord}
+
+	#If this coordinate is closer and not overlapping, save it.
 	if($orig_left_seg_coord > $closest)
 	  {
+	    #If the divider is inside the query coordinate, something went
+	    #wrong.  (If it's the same coordinate, it's OK.  We'll just use the
+	    #start of this identity segment as the location of the divider -
+	    #though there may be an issue if this turns out to not be a valid
+	    #codon boundary (i.e. frame 1).)
+	    if($orig_left_seg_coord > $coord)
+	      {
+		error("Returned coord [$orig_left_seg_coord] overlaps query ",
+		      "coord [$coord] in seq [$seqid] on its left side.  ",
+		      "Obtained from a segment in [$partner->[1]] and ",
+		      "alignment [$partner->[0]].  The query coord was ",
+		      "converted from [$seqid:$coord] to [$partner->[1]:",
+		      "$partner_coord] and the closest coord in that ",
+		      "sequence was: [$partner->[1]:$part_left_seg_coord] - ",
+		      "which should not overlap, but did overlap when ",
+		      "converted back to [$seqid:$orig_left_seg_coord] ",
+		      "coord.");
+	      }
 	    $closest = $orig_left_seg_coord;
-	    if(($orig_left_seg_coord + 1) == $coord)
+	    if($orig_left_seg_coord == $coord)
 	      {return($coord)}
 	  }
       }
+
+    #If this is the left-most edge pof the sequence, then we can return it,
+    #otherwise, we mist find a mid-way dividing point between this identity
+    #segment and the nearest one on the left
+    if($closest == 1)
+      {return($closest)}
 
     #We now have the closest occupied coordinate to the left of $coord.  We
     #need to split the difference and then return the closest frame 1 codon
@@ -2628,7 +3084,9 @@ sub getClosestLeftDivider
 	    #This should not happen, but just in case...
 	    if(($midpoint + 2) > $coord)
 	      {
-		error("Bad frame boundary.");
+		error("Bad frame boundary.  Frame 2.  Midpoint: ",
+		      "[$midpoint].  Closest: [$closest].  Coord(/final ",
+		      "start): [$coord].");
 		return($coord);
 	      }
 
@@ -2641,7 +3099,9 @@ sub getClosestLeftDivider
       {
 	if(($midpoint + 1) > $coord)
 	  {
-	    error("Bad frame boundary.");
+	    error("Bad frame boundary for left divider.  Frame 3.  Midpoint: ",
+		  "[$midpoint].  Closest: [$closest].  Coord(/final start): ",
+		  "[$coord].");
 	    return($coord);
 	  }
 
@@ -2653,10 +3113,11 @@ sub getClosestLeftDivider
     return($coord);
   }
 
-#Searches the segments of a solution for the closest right-most coordinate that
-#is to the left of a given coordinate.  A linear search is performed.  Could
-#improve this to be a binary search.  Note: Returns 1 if there are no segments
-#to the left or if the coordinate passed in was 1.
+#Searches the segments of a solution for the closest right-side coordinate that
+#is to the left of a given coordinate and returns the coordinate after it as a
+#valid divider (assuming all end coordinates are in frame 3).  A linear search
+#is performed.  Could improve this to be a binary search.  Note: Returns 1 if
+#there are no segments to the left or if the coordinate passed in was 1.
 sub getClosestLeftSegCoord
   {
     my $seqid = $_[0];
@@ -2668,16 +3129,23 @@ sub getClosestLeftSegCoord
     foreach my $rec (sort {$a->{FINAL_START} <=> $b->{FINAL_START}}
 		     @{$soln->{$seqid}})
       {
-	if($rec->{FINAL_START} > $coord)
+	#If we're back to the query coordinate, return the previous one
+	if($rec->{FINAL_START} >= $coord)
 	  {last}
 	if($rec->{FINAL_STOP} < $coord)
-	  {$closest = $rec->{FINAL_STOP}}
+	  {$closest = $rec->{FINAL_STOP} + 1}
+	#If this is a previous segment (i.e. it starts before the query coord)
+	#but it overlaps the query segment, set the divider at the query
+	#coordinate
 	elsif($rec->{FINAL_START} < $coord && $rec->{FINAL_STOP} >= $coord)
 	  {
-	    $closest = $coord - 1;
+	    $closest = $coord;
 	    last;
 	  }
       }
+
+    if((($closest - 1) % 3 + 1) != 1) #If the coord returned is not in frame 1
+      {error("Records with stops not in frame 3 exist.")}
 
     return($closest);
   }
@@ -2693,16 +3161,26 @@ sub getClosestRightDivider
     my $data     = $_[3];
     my $partners = $_[4];
 
+    if($coord % 3 != 0) #If the coordinate is not in frame 3
+      {error("Coordinate: [$coord] must be in frame 3.  Frame [",
+	     ((($coord - 1) % 3) + 1),"] was sent in.")}
+
     #For each alignment $seqid has been aligned with
-    my($closest);
+    my($closest,$seqlen);
     foreach my $partner (@$partners)
       {
 	if(!defined($closest))
-	  {$closest = length($data->{$partner->[0]}->{SEQS}->{$seqid})}
+	  {
+	    $seqlen  = length($data->{$partner->[0]}->{SEQS}->{$seqid});
+	    $closest = $seqlen + 1;
+	  }
 
 	#Convert the coordinate to the partner sequence
+	#Note, we're adding 1 to the coordinate becasue it is assumed that
+	#$coord is in frame 3 and the divider can only be in frame 1.
+	#convertDivider therefor can only take a frame 1 coordinate.
 	my $partner_coord = convertDivider($seqid,
-					   $coord,
+					   $coord + 1,
 					   $partner->[0],  #pair ID
 					   $partner->[1],  #partner seq ID
 					   $data);
@@ -2725,17 +3203,40 @@ sub getClosestRightDivider
 	#If this coordinate is closer, save it.
 	if($orig_rght_seg_coord < $closest)
 	  {
+	    #If the divider is inside the query coordinate, something went
+	    #wrong.  If it's to the immediate right, it's OK to use as a
+	    #divider - though there may be an issue if this turns out to not be
+	    #a valid codon boundary (i.e. frame 1).)
+	    if($orig_rght_seg_coord <= $coord)
+	      {
+		error("Returned coord [$orig_rght_seg_coord] overlaps query ",
+		      "coord [$coord] in seq [$seqid] on its right side.  ",
+		      "Obtained from a segment in [$partner->[1]] and ",
+		      "alignment [$partner->[0]].  The query coord was ",
+		      "converted from [$seqid:$coord+1] to [$partner->[1]:",
+		      "$partner_coord] and the closest coord in that ",
+		      "sequence was: [$partner->[1]:$part_rght_seg_coord] - ",
+		      "which should not overlap, but did overlap when ",
+		      "converted back to [$seqid:$orig_rght_seg_coord] ",
+		      "coord.");
+	      }
 	    $closest = $orig_rght_seg_coord;
 	    if(($orig_rght_seg_coord - 1) == $coord)
 	      {return($orig_rght_seg_coord)}
 	  }
       }
 
+    #If the closest "segment" is the end of the sequence (plus 1), no need to
+    #find the midpoint, because it's not a real segment - rather it's just the
+    #end boundary
+    if($closest == ($seqlen + 1))
+      {return($closest)}
+
     #We now have the closest occupied coordinate to the right of $coord.  We
     #need to split the difference and then return the closest frame 1 codon
     #position.  We add 1 to $coord because we want to choose a midpoint among
     #available positions to put a divider.  That includes the $closest
-    #position, but not the $coordt position (the last position of the query
+    #position, but not the $coord position (the last position of the query
     #segment)
     my $midpoint = int(($closest + $coord + 1) / 2);
 
@@ -2751,7 +3252,9 @@ sub getClosestRightDivider
 	    #This should not happen, but just in case...
 	    if(($midpoint + 2) > $closest)
 	      {
-		error("Bad frame boundary.");
+		error("Bad frame boundary.  Frame 2.  Midpoint: ",
+		      "[$midpoint].  Closest: [$closest].  Coord(/final ",
+		      "start): [$coord].");
 		return($coord + 1);
 	      }
 
@@ -2764,7 +3267,9 @@ sub getClosestRightDivider
       {
 	if(($midpoint + 1) > $closest)
 	  {
-	    error("Bad frame boundary.");
+	    error("Bad frame boundary for right divider.  Frame 3.  ",
+		  "Midpoint: [$midpoint].  Closest: [$closest].  Coord(",
+		  "/final start): [$coord].");
 	    return($coord + 1);
 	  }
 
@@ -2777,16 +3282,20 @@ sub getClosestRightDivider
   }
 
 #Searches the segments of a solution for the closest left-most coordinate that
-#is to the right of a given coordinate.  A linear search is performed.  Could
-#improve this to be a binary search.  Note: Returns sequence length +1 if there
-#are no segments to the right or if the coordinate passed in was the sequence
-#length.
+#is to the right of (or equal to) a given coordinate.  A linear search is
+#performed.  Could improve this to be a binary search.  Note: Returns sequence
+#length +1 if there are no segments to the right or of (or equal to) the
+#coordinate passed in, or if it was the sequence length.
 sub getClosestRightSegCoord
   {
     my $seqid  = $_[0];
     my $coord  = $_[1];
     my $soln   = $_[2];
     my $seqlen = $_[3];
+
+    if($seqlen < ($coord - 1))
+      {error("Coordinate: [$coord] submitted is larger than the sequence ",
+	     "length submitted for [$seqid]: [$seqlen] (plus 1).")}
 
     my $closest = $seqlen + 1;
 
@@ -2797,9 +3306,9 @@ sub getClosestRightSegCoord
 	  {last}
 	if($rec->{FINAL_START} > $coord)
 	  {$closest = $rec->{FINAL_START}}
-	elsif($rec->{FINAL_START} <= $coord && $rec->{FINAL_STOP} > $coord)
+	elsif($rec->{FINAL_START} <= $coord && $rec->{FINAL_STOP} >= $coord)
 	  {
-	    $closest = $coord + 1;
+	    $closest = $coord;
 	    last;
 	  }
       }
@@ -2831,6 +3340,7 @@ sub copyDivider
     my $partners = $_[3];
     my $data     = $_[4];
     my $pair_id  = $_[5];
+    my $side     = $_[6]; #left side = we know the source or whether to recode
 
     my $uniq_seq_partners = {};
     foreach my $partner_seqid (grep {$_ ne $seqid} map {$_->[1]} @$partners)
@@ -2858,46 +3368,137 @@ sub copyDivider
 	    if($pair_id eq $partner_pair_id)
 	      {$div_map->{$partner_seqid}->{$partner_divider} =
 		 {PAIR_ID => $pair_id,
-		  TYPE    => 'SOURCE',
+		  TYPE    => ($side eq 'left' ? 'SOURCE' : undef),
 		  STOP    => undef,
 		  SEQ     => ''}}
 	    else
 	      {$div_map->{$partner_seqid}->{$partner_divider} =
-		 {PAIR_ID => undef,    #Not needed for type 'recode'. Obtained
-		                       #from partners array
-		  TYPE    => 'RECODE',
+		 {PAIR_ID => $pair_id,
+		  TYPE    => ($side eq 'left' ? 'RECODE' : undef),
 		  STOP    => undef,
 		  SEQ     => ''}}
 	  }
-	elsif($div_map->{$partner_seqid}->{$partner_divider}->{TYPE} eq
-	      'SOURCE' &&
-	      $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} ne
-	      $pair_id)
-	  {error("Partner sequence [$partner_seqid] starting at ",
-		 "[$partner_divider] has a conflict between alignments [",
-		 $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID},
-		 "] and [$pair_id].  Unable to copy segment divider ",
-		 "[$seqid:$divider] from alignment [$pair_id] to the ",
-		 "partner sequence.")}
-	#Else if this is a divider of type recode, but we're being copied from
-	#the same pair, change it to source
-	elsif($div_map->{$partner_seqid}->{$partner_divider}->{TYPE} ne
-	      'SOURCE' && $pair_id eq $partner_pair_id)
+	else
 	  {
-	    $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} =
-	      $partner_pair_id;
-	    $div_map->{$partner_seqid}->{$partner_divider}->{TYPE} = 'SOURCE';
+	    #If the existing divider was copied from a different pair
+	    if($div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} ne
+	       $partner_pair_id)
+	      {
+		#If the partner being copied to is in the same pair, copy as
+		#source
+		if($partner_pair_id eq $pair_id)
+		  {
+		    #If the existing divider copied from a different pair is
+		    #marked as 'SOURCE', it's a conflict
+		    if(defined($div_map->{$partner_seqid}->{$partner_divider}
+			       ->{TYPE}) &&
+		       $div_map->{$partner_seqid}->{$partner_divider}
+		       ->{TYPE} eq 'SOURCE')
+		      {debug("Partner sequence [$partner_seqid] starting ",
+			     "at [$partner_divider] has multiple source ",
+			     "alignments [",
+			     $div_map->{$partner_seqid}->{$partner_divider}
+			     ->{PAIR_ID},
+			     "] and [$pair_id], probably because their ",
+			     "identity segments are the same across ",
+			     "multiple partner sequences.  Ignoring ",
+			     "divider [$seqid:$divider] from alignment ",
+			     "[$pair_id] to the partner sequence ",
+			     "[$partner_seqid:$partner_divider] in ",
+			     "alignment [$partner_pair_id].  This should be ",
+			     "checked manually to confirm that their ",
+			     "identity segments are encoded the same in both ",
+			     "alignments.  Even though completely ",
+			     "overlapping redundant identical segments were ",
+			     "aribtrarily removed from a sequence that was ",
+			     "aligned independently with 2 other sequences, ",
+			     "the segments still exist in the partners, ",
+			     "which will trigger the copying of the same ",
+			     "divider (from different sources) to the common ",
+			     "sequence record - and is OK - as long as it's ",
+			     "confirmed that this is what's happening.  One ",
+			     "possible complication is if the identity in ",
+			     "one pair is larger than in the other pair.  ",
+			     "The other pair's segment would have been ",
+			     "eliminated (since it was completely ",
+			     "overlapping) and its partner would copy a ",
+			     "unique divider at its start and 1 after the ",
+			     "stop, changing the source unnecessarily, but ",
+			     "since they MUST be identical anyway, it only ",
+			     "results in making it more complicated than it ",
+			     "needs to be.",{LEVEL => 3})
+			 if($side eq 'left')}
+		    #Else replace any undefined or 'recode' type with a source
+		    #type from this pair, because it's being copied from within
+		    #this pair
+		    else
+		      {
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{PAIR_ID} = $partner_pair_id;
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{TYPE} = ($side eq 'left' ? 'SOURCE' : undef);
+		      }
+		  }
+		#Otherwise, copy as type recode (if existing isn't source)
+		else
+		  {
+		    #If the existing divider copied from a different pair is
+		    #not defined, update the divider as a RECODE divider
+		    if(!defined($div_map->{$partner_seqid}->{$partner_divider}
+				->{TYPE}))
+		      {
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{PAIR_ID} = $partner_pair_id;
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{TYPE} = ($side eq 'left' ? 'RECODE' : undef);
+		      }
+		    #Else - leave it as it is.  We're arbitrarily using the
+		    #first copied divider and recode source
+		  }
+	      }
+	    #Else the divider being copied over is the same as where we are
+	    #currently copying to
+	    else
+	      {
+		#If the partner being copied to is in the same pair as the one
+		#being copied from, copy as source
+		if($partner_pair_id eq $pair_id)
+		  {
+		    #If the existing divider copied from a different pair is
+		    #not defined or not marked as 'SOURCE', update it, as we
+		    #are over-writing a divider that may have been initially
+		    #created by some other means - it's probably just a
+		    #duplicate
+		    if(!defined($div_map->{$partner_seqid}->{$partner_divider}
+				->{TYPE}) ||
+		       $div_map->{$partner_seqid}->{$partner_divider}
+		       ->{TYPE} ne 'SOURCE')
+		      {
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{PAIR_ID} = $partner_pair_id;
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{TYPE} = ($side eq 'left' ? 'SOURCE' : undef);
+		      }
+		    #Else no need to copy - everything is already as it should
+		    #be
+		  }
+		#Otherwise, copy as type recode
+		else
+		  {
+		    #Only copy if not defined
+		    if(!defined($div_map->{$partner_seqid}->{$partner_divider}
+				->{TYPE}))
+		      {
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{PAIR_ID} = $partner_pair_id;
+			$div_map->{$partner_seqid}->{$partner_divider}
+			  ->{TYPE} = ($side eq 'left' ? 'RECODE' : undef);
+		      }
+		    #Else no need to copy - everything is already as it should
+		    #be or we're just going with the first one that was copied
+		  }
+	      }
 	  }
-	#Else TYPE is 'SOURCE' and it's equal to $pair_id anyway, or it's not
-	#'SOURCE' and this isn't the source alignment.  In the second case, it
-	#means that there are multiple options to recode for (either for a
-	#segment one of its partners from one of its alignments where it
-	#matched a third sequence, or another of its partners with another
-	#sequence from another alignment).  We will arbitrarily go with the
-	#first one we encounter.  This is unlikely to happen if a user is
-	#interested in one target sequence with multiple partners, but it could
-	#happen if they submit all pairs of more than 3 sequences.  In either
-	#case, we do not need to change anything.
       }
   }
 
@@ -2917,10 +3518,20 @@ sub convertDivider
     my $target_seqid = $_[3];
     my $data         = $_[4];
 
-    if($query_coord > length($data->{$pairid}->{SEQS}->{$query_seqid}))
-      {return(length($data->{$pairid}->{SEQS}->{$target_seqid}) + 1)}
-    elsif($query_coord == length($data->{$pairid}->{SEQS}->{$query_seqid}))
-      {return(length($data->{$pairid}->{SEQS}->{$target_seqid}))}
+    #A divider must be in frame 1 because if we divide the sequence source mid-
+    #codon, it could change the encoded AA
+    if($query_coord % 3 != 1) #If the coordinate is not in frame 1
+      {error("Coordinate sent in: [$query_coord] must be in frame 1.  Frame [",
+	     ((($query_coord - 1) % 3) + 1),"] was sent in.")}
+
+    if($query_coord >= length($data->{$pairid}->{SEQS}->{$query_seqid}))
+      {
+	if(length($data->{$pairid}->{SEQS}->{$query_seqid}) % 3 != 0)
+	  {error("Length of sequence [$query_seqid]: [",
+		 length($data->{$pairid}->{SEQS}->{$query_seqid}),
+		 "] is not a multiple of 3!")}
+	return(length($data->{$pairid}->{SEQS}->{$target_seqid}) + 1);
+      }
 
     my $query_pos  = 0;
     my $target_pos = 0;
@@ -2948,6 +3559,52 @@ sub convertDivider
 	$aln_pos++;
       }
 
+    if($target_pos % 3 != 1)
+      {error("Coordinate computed: [$target_pos] is not in frame 1.  Frame [",
+	     ((($target_pos - 1) % 3) + 1),"] was calculated.")}
+
+    return($target_pos);
+  }
+
+#This subroutine takes a sequence coordinate (not including gap characters) of
+#one sequence and finds the corresponding partner coordinate in an alignment.
+#If a coordinate aligns with a gap, the coordinate of the last real sequence
+#character of the partner is returned.  This differs from convertDivider, which
+#attempts to include end-gaps, e.g. if convertDivider is given coordinate 1,
+#which aligns with its partner at coordinate 15, it will return coordinate 1,
+#to include the end-gap in front of coordinate 1 of the query sequence.  This
+#method on the other hand, will return 15.  Also e.g., if convertDivider is
+#given coordinate 1000, and that corresponds to a gap character in the partner,
+#The returned target coordinate is incremented 1 more time so that the entire
+#end gap is included.  Note, this assumes that convertDivider only takes frame
+#1 positions and it's assumed that whole codons are aligned and the divider
+#must always be in frame 1.
+sub convertAlnSeqCoord
+  {
+    my $query_seqid  = $_[0];
+    my $query_coord  = $_[1];
+    my $pairid       = $_[2];
+    my $target_seqid = $_[3];
+    my $data         = $_[4];
+
+    my $query_pos  = 0;
+    my $target_pos = 0;
+    my $aln_pos    = 0;
+
+    while($query_pos < $query_coord)
+      {
+	if(substr($data->{$pairid}->{ALNS}->{$query_seqid},
+		  $aln_pos,1) ne '-')
+	  {$query_pos++}
+
+	my $target_char = substr($data->{$pairid}->{ALNS}->{$target_seqid},
+				 $aln_pos,1);
+	if($target_char ne '-')
+	  {$target_pos++}
+
+	$aln_pos++;
+      }
+
     return($target_pos);
   }
 
@@ -2956,7 +3613,7 @@ sub fillMapStops
   {
     my $div_map = $_[0];
 
-    foreach my $seqid (keys(%$div_map))
+    foreach my $seqid (sort {$a cmp $b} keys(%$div_map))
       {
 	#Obtain an array of dividers(/start coordinates for each section)
 	my $div_array = [sort {$a <=> $b} keys(%{$div_map->{$seqid}})];
@@ -2975,13 +3632,16 @@ sub fillMapStops
       }
   }
 
+#This returns a hash keyed on sequence ID whose values are arrays containing
+#Each pair ID of the alignments the sequence is involved in along with the
+#sequence ID it was aligned/optimized with (contained in 2-member sub-arrays)
 sub getPartnersHash
   {
     my $soln  = $_[0];
     my $data  = $_[1];
     my $partners_hash = {};
 
-    foreach my $seqid (keys(%$soln))
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {$partners_hash->{$seqid} = getPartnerPairSeqIDs($seqid,$soln,$data)}
 
     return($partners_hash);
@@ -3000,7 +3660,7 @@ sub getPartnerPairSeqIDs
     foreach my $pairid (map {$_->{PAIR_ID}} @{$soln->{$seqid}})
       {$pair_ids->{$pairid} = 0}
 
-    my $partners = [grep {$_ ne $seqid}
+    my $partners = [grep {$_->[1] ne $seqid}
 		    map {my $pid=$_;
 			 map {[$pid,$_]} keys(%{$data->{$pid}->{SEQS}})}
 		    keys(%$pair_ids)];
@@ -3026,9 +3686,12 @@ sub weaveSeqs
     my $partners_hash = $_[2];
     my $matrix        = $_[3];
     my $codon_hash    = $_[4];
+    my $soln          = $_[5];
 
     my $num_filled = 1;
     my $unfinished = 1;
+
+    my $countdowns = {map {$_ => scalar(keys(%{$map->{$_}}))} keys(%$map)};
 
     #While all segments' alignment sources have not been determined and we're
     #still making progress
@@ -3042,18 +3705,37 @@ sub weaveSeqs
 	$num_filled = 0;
 
 	#For each each sequence
-	foreach my $seqid (keys(%$map))
+	foreach my $seqid (sort {$a cmp $b} keys(%$map))
 	  {
+	    my $laststop = 0;
+	    my $seqlen   = 0;
+
 	    #Cycle through the subsequence records
-	    foreach my $divider (keys(%{$map->{$seqid}}))
+	    foreach my $divider (sort {$a <=> $b} keys(%{$map->{$seqid}}))
 	      {
+		#The length of any version of the sequence will do, as long as
+		#this sequence is a part of the pair the current divider was
+		#copied from.  Note, this will fail if no identity segments
+		#were found in a pair.
+		if(exists($data->{$map->{$seqid}->{$divider}->{PAIR_ID}}
+			  ->{SEQS}->{$seqid}) && $seqlen == 0)
+		  {$seqlen = length($data->{$map->{$seqid}->{$divider}
+					    ->{PAIR_ID}}->{SEQS}
+				    ->{$seqid})}
+
+		if($laststop + 1 != $divider)
+		  {error("Map incomplete for sequence: [$seqid].  Missing ",
+			 "section between [$laststop-$divider].")}
+		$laststop = $map->{$seqid}->{$divider}->{STOP};
+
 		if($map->{$seqid}->{$divider}->{SEQ} eq '')
 		  {
 		    #If the source type of the sequence is RECODE, we need to
 		    #determine what sequence this sequence's recoding should be
 		    #based on.  We will arbitrarily pick the forst completely
 		    #overlapping and filled in partner
-		    if($map->{$seqid}->{$divider}->{TYPE} eq 'RECODE')
+		    if(!defined($map->{$seqid}->{$divider}->{TYPE}) ||
+		       $map->{$seqid}->{$divider}->{TYPE} eq 'RECODE')
 		      {
 			if(reCodeLeftoverSegment($seqid,
 						 $divider,
@@ -3062,11 +3744,33 @@ sub weaveSeqs
 						 $matrix,
 						 $data,
 						 $codon_hash))
-			  {$num_filled++}
+			  {
+			    $num_filled++;
+			    $countdowns->{$seqid}--;
+			    verboseOverMe("Sourcing.  Unfinished segments: [",
+					  join(' ',map {"$_:$countdowns->{$_}"}
+					       sort {$a cmp $b}
+					       keys(%$countdowns)),
+					  "] $seqid:$divider-",
+					  $map->{$seqid}->{$divider}->{STOP},
+					  " Recoding");
+			  }
+			#Could not recode this segment, so we'll need to start
+			#the loop over after this round
 			else
-			  {$unfinished = 0}
+			  {
+			    $unfinished = 1;
+			    verboseOverMe("Sourcing.  Unfinished segments: [",
+					  join(' ',map {"$_:$countdowns->{$_}"}
+					       sort {$a cmp $b}
+					       keys(%$countdowns)),
+					  "] ",
+					  "$seqid:$divider-",
+					  $map->{$seqid}->{$divider}->{STOP},
+					  " TBD");
+			  }
 		      }
-		    else #TYPE is 'SOURCE' - so grade the sequence directly
+		    else #TYPE is 'SOURCE' - so grab the sequence directly
 		      {
 			$map->{$seqid}->{$divider}->{SEQ} =
 			  substr($data->{$map->{$seqid}->{$divider}->{PAIR_ID}}
@@ -3075,11 +3779,29 @@ sub weaveSeqs
 				 ($map->{$seqid}->{$divider}->{STOP} -
 				  $divider + 1));
 			$num_filled++;
+			$countdowns->{$seqid}--;
+			verboseOverMe("Sourcing.  Unfinished segments: [",
+				      join(' ',map {"$_:$countdowns->{$_}"}
+					   sort {$a cmp $b}
+					   keys(%$countdowns)),
+				      "] ",
+				      "$seqid:$divider-",
+				      $map->{$seqid}->{$divider}->{STOP},
+				      " Sourcing");
 		      }
 		  }
 	      }
+
+	    if($laststop != $seqlen)
+	      {error("Map incomplete for sequence: [$seqid].  Missing ",
+		     "section at the end between [$laststop-$seqlen].")}
 	  }
       }
+
+    verboseOverMe("Sourcing.  Unfinished segments: [",
+		  join(' ',map {"$_:$countdowns->{$_}"} sort {$a cmp $b}
+		       keys(%$countdowns)),
+		  "] Done");
 
     if($unfinished)
       {error("Unexpected case.  Unable to determine which alignment every ",
@@ -3089,42 +3811,223 @@ sub weaveSeqs
     #Now assemble the sequences
     my $seqhash = {};
 
-    foreach my $seqid (keys(%$map))
+    foreach my $seqid (sort {$a cmp $b} keys(%$map))
       {
-	my $lastdiv = 0;
+	my $laststop = 0;
 	foreach my $divider (sort {$a <=> $b} keys(%{$map->{$seqid}}))
 	  {
-	    if(($lastdiv + 1) != $divider)
+	    my $start = $divider;
+	    my $stop  = $map->{$seqid}->{$divider}->{STOP};
+
+	    verboseOverMe("Assembing.  [$seqid:$start-$stop]");
+
+	    if(($laststop + 1) != $start)
 	      {
-		my $nstart = $lastdiv + 1;
-		my $nstop  = $divider - 1;
-		my $nsize = $nstop - $nstart + 1;
-		error("Unable to determine sequence [$seqid] from [$nstart] ",
-		      "to [$nstop].  This should not have happened.  ",
-		      "Inserting 'Ns' so that you get something out.");
-		$seqhash->{$seqid} .= ('N' x $nsize);
+		my $size = $start - $laststop - 1;
+		error("Unable to determine sequence [$seqid] from [",
+		      ($laststop + 1),"] ","to [",($start - 1),"].  This ",
+		      "should not have happened.  Inserting 'Ns' so that you ",
+		      "get something out.");
+		$seqhash->{$seqid} .= ('N' x $size);
+	      }
+
+	    if(length($map->{$seqid}->{$divider}->{SEQ}) !=
+	       ($stop - $start + 1))
+	      {
+		error("The length of the saved sequence [$seqid] (from ",
+		      "[$start] to [$stop]): [",
+		      length($map->{$seqid}->{$divider}->{SEQ}),"] is not ",
+		      "the expected length [",($stop - $start + 1),"].  This ",
+		      "should not have happened.  Inserting 'Ns'.",
+		      {DETAIL =>
+		       (join('',("PAIR_ID => ",
+				 $map->{$seqid}->{$divider}->{PAIR_ID},
+				 ", TYPE => ",
+				 (defined($map->{$seqid}->{$divider}->{TYPE}) ?
+				  $map->{$seqid}->{$divider}->{TYPE} : 'undef')
+				)))});
+		$seqhash->{$seqid} .= ('N' x ($stop - $start + 1));
 	      }
 	    else
 	      {$seqhash->{$seqid} .= $map->{$seqid}->{$divider}->{SEQ}}
+
+	    $laststop = $stop;
 	  }
       }
+
+    if(isVerbose())
+      {print STDERR "\n"}
+
+    verbose("Editing codons to satisfy overlap...");
+
+    #Edit the sequences to add the alternate codons (and while we're at it,
+    #we'll error-check that the sequences were created, the correct length, and
+    #encode the same AA sequence)
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
+      {
+	#The length of each version of a sequence should be the same in any
+	#pair it's involved in, so let's arbitrarily grab one.
+	my $any_pair_id = $partners_hash->{$seqid}->[0]->[0];
+	my $any_orig_seq = $data->{$any_pair_id}->{SEQS}->{$seqid};
+	if(!exists($seqhash->{$seqid}) || !defined($seqhash->{$seqid}))
+	  {
+	    error("Sequence [$seqid] was not constructed!");
+	    next;
+	  }
+	elsif(length($seqhash->{$seqid}) !=
+	      length($any_orig_seq))
+	  {error("The length of sequence [$seqid]: [",
+		 length($seqhash->{$seqid}),"] is not the expected length: [",
+		 length($any_orig_seq),"].")}
+
+	#For each record that is of type 'alternate codon'
+	foreach my $altrec (grep {$_->{TYPE} eq 'alt'} @{$soln->{$seqid}})
+	  {
+	    if(!exists($altrec->{ALT_CODON}) ||
+	       !defined($altrec->{ALT_CODON}) ||
+	       length($altrec->{ALT_CODON}) != 3)
+	      {error("Mal-formed or missing alternate codon for sequence ",
+		     "[$seqid].")}
+	    elsif($altrec->{FINAL_STOP} > length($seqhash->{$seqid}))
+	      {error("Woven sequence [$seqid] is too short to place ",
+		     "alternate codon at position [",
+		     "$altrec->{FINAL_START}-$altrec->{FINAL_STOP}].")}
+	    else
+	      {
+		verbose("Inserting alternate codon: [$seqid:",
+			"$altrec->{FINAL_START} $altrec->{ALT_CODON}]");
+		substr($seqhash->{$seqid},($altrec->{FINAL_START} - 1),3,
+		       $altrec->{ALT_CODON});
+	      }
+	  }
+
+	#Check that the sequences encode the same AA sequence
+	my $any_orig_aa = translate($any_orig_seq,     $codon_hash->{REV});
+	my $mixed_aa    = translate($seqhash->{$seqid},$codon_hash->{REV});
+	if($any_orig_aa ne $mixed_aa)
+	  {error("The new mixed hybrid version of sequence [$seqid]'s ",
+		 "translation differs from the original alignment ",
+		 "[$any_pair_id].",
+		 {DETAIL => "ORIG: [$any_orig_aa]\nNEW:  [$mixed_aa]"})}
+	elsif(isVerbose())
+	  {
+	    my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
+	    verbose("[$seqid] Validated^.  [$n/",
+		    length($any_orig_seq),"] nts changed*.");
+	  }
+      }
+
+    verbose("^ = Confirmed to encode the same amino acid sequence compared ",
+	    "to 1 arbitrarily selected alignment.\n* = As compared to 1 ",
+	    "arbitrarily selected alignment.");
 
     return($seqhash);
   }
 
-#This sub searches through a sequence's partners in the map to find one that
-#has sequence that completely overlaps.  If there is not complete overlap, it
-#returns 0 and does not do any recoding.  If there is complete existing
-#overlap, it obtains the sequence to be recoded and then recodes each codon to
-#best match (by homology) the partner sequence (without changing the AA that
-#was originally encoded).
+sub outputStats
+  {
+    my $soln     = $_[0];
+    my $data     = $_[1];
+    my $max_size = $_[2];
+    my $score = scoreSolution($soln,$data,$max_size);
+
+    outputSolutionScore($score);
+  }
+
+sub outputSolutionScore
+  {
+    my $score = $_[0];
+
+    print("$score->[0]\tMax number of size [$max_size] segments included ",
+	  "from the alignment with the fewest contributed segments of that ",
+	  "size\n$score->[1]\tTotal number of unique segments of size ",
+	  "[$max_size] per sequence included\n$score->[2]\tSegment spacing ",
+	  "score.  Int(sqrt()) of the sum of distances of the closest ",
+	  "segment to the region center, normalized by the number of ",
+	  "regions.  (A region represents the most even spacing possible ",
+	  "given the number of unique segments.)\n$score->[3]\tTotal number ",
+	  "of unique bases included in an identity segment of any size.\n");
+  }
+
+sub numDiff
+  {
+    my $seq1 = $_[0];
+    my $seq2 = $_[1];
+
+    if(length($seq1) != length($seq2))
+      {
+	error("Sequence lengths differ.");
+	return(-1);
+      }
+
+    my $d = 0;
+    foreach my $p (0..(length($seq1) - 1))
+      {
+	if(uc(substr($seq1,$p,1)) eq '-' || uc(substr($seq2,$p,1)) eq '-')
+	  {error("Alignment characters found.")}
+	$d += (substr($seq1,$p,1) eq substr($seq2,$p,1));
+      }
+
+    return($d);
+  }
+
+sub translate
+  {
+    my $nt         = $_[0];
+    my $codon_hash = $_[1];
+    my $len        = length($nt);
+    my $aa         = '';
+
+    if($len % 3)
+      {
+	error("Sequence length [$len] is not a multiple of 3.");
+	$len -= ($len % 3);
+      }
+
+    for(my $i = 0;$i < $len;$i += 3)
+      {
+	my $codon = substr($nt,$i,3);
+	if(!exists($codon_hash->{$codon}))
+	  {
+	    error("Codon [$codon] does not exist in the usage file.  ",
+		  "Inserting an X.");
+	    $aa .= 'X';
+	  }
+	elsif(!defined($codon_hash->{$codon}) || $codon_hash->{$codon} eq '')
+	  {
+	    error("Codon [$codon] exists in the usage file, but doesn't have ",
+		  "an amino acid value.  Inserting an X.");
+	    $aa .= 'X';
+	  }
+	elsif(length($codon_hash->{$codon}) != 1)
+	  {
+	    error("Bad amino acid value for codon [$codon] in the usage ",
+		  "file.  Inserting an X.");
+	    $aa .= 'X';
+	  }
+	else
+	  {$aa .= $codon_hash->{$codon}}
+      }
+
+    return($aa);
+  }
+
+#This sub searches through a sequence's partners in the map to find one (or
+#more) that has sequence for the supplied map section (i.e. the supplied
+#divider).  If there does not exist a section (or sections) of sequence for the
+#supplied divider, 0 is returned and it does not do any recoding.  If there is
+#complete existing overlap, it obtains the sequence to be recoded and its
+#partner sequence (for its gap characters).  It replaces the partner sequence
+#with the sequence(s) saved in the map and then recodes each codon to best
+#match (by homology) the new partner sequence (without changing the AA that was
+#originally encoded).
 sub reCodeLeftoverSegment
   {
-    my $seqid      = $_[0];
-    my $divider    = $_[1];
-    my $map        = $_[2];
-    my $partners   = $_[3];
-    my $matrix     = $_[4];
+    my $seqid      = $_[0];  #This is the sequence that needs to be recoded
+    my $divider    = $_[1];  #This is the portion that needs recoded
+    my $map        = $_[2];  #This is where the final sequences are saved
+    my $partners   = $_[3];  #This is where to obtain the sequence to recode
+    my $matrix     = $_[4];  #This has the encoding data
     my $data       = $_[5];
     my $codon_hash = $_[6];
 
@@ -3136,19 +4039,21 @@ sub reCodeLeftoverSegment
 	my $pairid        = $partner->[0];
 	my $partner_seqid = $partner->[1];
 
-	#We need to obtain the aligned sequence corresponding to the positions
-	#in each sequence, if it's populated in the map
+	#We need to obtain the aligned sequence that we are going to recode and
+	#its partner, which will have been replaced by the sequence that was
+	#already saved in the map, either sourced from another alignment or
+	#itself recoded
 	my($fixed_partner_aln,$change_this_aln) =
 	  getPartnerAlnSeqs($map,
 			    $data,
 			    $pairid,
-			    $seqid,
+			    $seqid,          #Obtain this seq from alignment
 			    $divider,
 			    $map->{$seqid}->{$divider}->{STOP},
-			    $partner_seqid);
+			    $partner_seqid); #Replace this seq with seq in map
 
 	if(defined($fixed_partner_aln) && $fixed_partner_aln ne '' &&
-	   defined($change_this_aln) && $change_this_aln ne '')
+	   defined($change_this_aln)   && $change_this_aln ne '')
 	  {
 	    my $fixed_start = convertDivider($seqid,
 					     $divider,
@@ -3171,147 +4076,166 @@ sub reCodeLeftoverSegment
     return(0);
   }
 
-#Compiles a portion of sequence (including alignment characters) from one or
-#more sections from the map if those sections have all been populated with
-#sequence.  This performs a linear search.  It could be improved to do a binary
-#search.
+#This obtains a segment of an alignment (bounded by the coordinates of the
+#sequence that will be recoded after it is returned).  The sequence that will
+#be changed is obtained directly from the alignment.  The partner sequence is
+#also obtained (for its alignment characters) but is replaced by the sequence
+#saved in the map - if it's there.  If any sequence in the partner is missing
+#from the map, undef is returned.
 sub getPartnerAlnSeqs
   {
     my $map          = $_[0];
     my $data         = $_[1];
     my $pairid       = $_[2];
-    my $change_seqid = $_[3];
-    my $change_start = $_[4];
+    my $change_seqid = $_[3]; #We will be recoding this sequence obtained
+    my $change_start = $_[4]; #directly from the alignment
     my $change_stop  = $_[5];
-    my $fixed_seqid  = $_[6];
+    my $fixed_seqid  = $_[6]; #This sequence will be obtained from the
+                              #alignment, but then replaced with the segment
+                              #saved in the map
 
+    #We're going to be looking through the partner sequences, because that's
+    #the sequence we're going to be basing the recoding on.  We need to compile
+    #all sections of the partner sequence in the map we need and check to see
+    #if it's populated.  So we need the coordinates as a guide, thus we must
+    #convert the coordinates we're looking for
     my $fixed_start = convertDivider($change_seqid,
 				     $change_start,
 				     $pairid,
 				     $fixed_seqid,
 				     $data);
-    my $fixed_stop  = convertDivider($change_seqid,
-				     $map->{$change_seqid}->{$change_start}
-				     ->{STOP} + 1,
-				     $pairid,
-				     $fixed_seqid,
-				     $data) - 1;
-    my $fixed_size  = $fixed_stop - $fixed_start + 1;
 
-    #We need to first obtain the fixed sequence from the map.  It may actually
-    #differ from its representation in the alignment/pair because it itself may
-    #have been recoded.  We can determine whether it was recoded or not by its
-    #type.  If its type is 'RECODE', then we need to obtain the alignment
-    #sequence from the pair and alter its code to what the map contained
-    #(preserving the gap characters/positions)
-    my $fixed_aln = '';
+    #This will get the coordinate of the last nt that aligned with the query
+    #segment, even if it has an end gap (as opposed to how convertDivider
+    #works)
+    my $fixed_stop = convertAlnSeqCoord($change_seqid,
+					$change_stop,
+					$pairid,
+					$fixed_seqid,
+					$data);
 
-    #Also obtain the sequence to change (based on the fixed sequence
-    my $change_aln = '';
-
-    #Keep track of whether any overlapping portion was sourced from an
-    #alignment or whether it itself was recoded
-    my($sourced);
+    my $replace_seq = '';
 
     #These values will change
     my $cur_change_start = $change_start;
     my $cur_change_stop  = $change_stop;
+    my($cur_fixed_stop);
 
     #For each section in order of start coordinate
     foreach my $cur_fixed_start (sort {$a <=> $b}
 				 keys(%{$map->{$fixed_seqid}}))
       {
-	my $cur_fixed_stop = $map->{$fixed_seqid}->{$cur_fixed_start}->{STOP};
+	$cur_fixed_stop = $map->{$fixed_seqid}->{$cur_fixed_start}->{STOP};
 
-	#If there is overlap with the target fixed start and stop
+	#If there is overlap with the sequence slated to be recoded (we don't
+	#care about the partner sequence except to know whether there is any
+	#sequence saved in the map for it)
 	if(coordsOverlap($cur_fixed_start,$cur_fixed_stop,
 			 $fixed_start,$fixed_stop))
 	  {
-	    if($map->{$fixed_seqid}->{$cur_fixed_start}->{TYPE} eq 'RECODE')
-	      {$sourced = 0}
-	    else
-	      {$sourced = 1}
-
 	    #If there is no sequence present yet for this section, we cannot
 	    #proceed
 	    if($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ} eq '')
-	      {return(0)}
+	      {return(undef,undef)}
+	    elsif(length($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ}) !=
+		  ($map->{$fixed_seqid}->{$cur_fixed_start}->{STOP} -
+		   $cur_fixed_start + 1))
+	      {error("The sequence for [$fixed_seqid] stored in the map: ",
+		     "[$map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ}] of ",
+		     "type [",
+		     (defined($map->{$fixed_seqid}->{$cur_fixed_start}->{TYPE})
+		      ? $map->{$fixed_seqid}->{$cur_fixed_start}->{TYPE} :
+		      'undef'),"] and pair ",
+		     "[$map->{$fixed_seqid}->{$cur_fixed_start}->{PAIR_ID}] ",
+		     "is not the expected length: [",
+		     ($map->{$fixed_seqid}->{$cur_fixed_start}->{STOP} -
+		      $cur_fixed_start + 1),"].")}
 
-	    my $substr_start = 0;
+	    my $substr_start = ($cur_fixed_start < $fixed_start ?
+			        $fixed_start - $cur_fixed_start : 0);
 
-	    #If the sequence we're looking for starts somewhere in the middle
-	    #of the current section, bump up the relative start
-	    if($cur_fixed_start < $fixed_start)
-	      {$substr_start = $fixed_start - $cur_fixed_start}
-
-	    my $tmp_fixed_start = $cur_fixed_start + $substr_start;
-	    my $tmp_fixed_stop  = ($cur_fixed_stop <= $fixed_stop ?
-				   $cur_fixed_stop : $fixed_stop);
-
-	    #Obtain the current change start/stop
-	    my $cur_change_start = convertDivider($fixed_seqid,
-						  $tmp_fixed_start,
-						  $pairid,
-						  $change_seqid,
-						  $data);
-	    if($cur_change_start < $change_start)
-	      {$cur_change_start = $change_start}
-	    my $cur_change_stop  = convertDivider($fixed_seqid,
-						  $tmp_fixed_stop + 1,
-						  $pairid,
-						  $change_seqid,
-						  $data) - 1;
-	    if($cur_change_stop > $change_stop)
-	      {$cur_change_stop = $change_stop}
-
-	    my($next_fixed_seq,$next_change_seq) =
-	      getAlnSegment($pairid,
-			    $fixed_seqid,
-			    $tmp_fixed_start,
-			    $tmp_fixed_stop,
-			    $change_seqid,
-			    $cur_change_start,
-			    $cur_change_stop,
-			    $data);
-
-	    #If the requence obtained has been previously recoded, replace the
-	    #sequence characters in the alignment obtained with the recoded
-	    #sequence that was saved in the map object (without alignment
-	    #characters)
-	    if(!$sourced)
+	    #If this represents only a portion of the saved/recoded
+	    #sequence, grab that subsequence from the map object
+	    my $tmp_replace_seq = '';
+	    if($cur_fixed_stop > $fixed_stop)
 	      {
-		#Obtain the recoded sequence to use to replace the sequence in
-		#the aligned version of this sequence
-		my $replace_seq = '';
-
-		#If this represents only a portion of the saved/recoded
-		#sequence, grab that subsequence from the map object
-		if($cur_fixed_stop > $fixed_stop)
-		  {
-		    my $remainder =
-		      length($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ}) -
-			$substr_start;
-		    $remainder -= ($cur_fixed_stop - $fixed_stop);
-		    $replace_seq =
-		      substr($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ},
-			     $substr_start,$remainder);
-		  }
-		else
-		  {$replace_seq =
-		     substr($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ},
-			    $substr_start)}
-
-		$next_fixed_seq = replaceAlnSegment($next_fixed_seq,
-						    $replace_seq);
+		my $remainder =
+		  length($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ}) -
+		    $substr_start;
+		$remainder -= ($cur_fixed_stop - $fixed_stop);
+		if(length($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ})
+		   < ($substr_start + 1))
+		  {error("Sequence: [",
+			 $map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ},
+			 "] from [$fixed_seqid] is too short to be ",
+			 "substringed starting at position [",
+			 ($substr_start + 1),"].  cur_fixed_start:",
+			 "$cur_fixed_start cur_fixed_stop:$cur_fixed_stop ",
+			 "orig:$fixed_start-$fixed_stop")}
+		elsif(length($map->{$fixed_seqid}->{$cur_fixed_start}
+			     ->{SEQ}) < ($substr_start + $remainder))
+		  {error("Sequence: [",
+			 $map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ},
+			 "] is too short to obtain [$remainder] bases ",
+			 "substringed starting from position [",
+			 ($substr_start + 1),"].")}
+		$tmp_replace_seq =
+		  substr($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ},
+			 $substr_start,$remainder);
 	      }
+	    else
+	      {$tmp_replace_seq =
+		 substr($map->{$fixed_seqid}->{$cur_fixed_start}->{SEQ},
+			$substr_start)}
 
-	    $fixed_aln  .= $next_fixed_seq;
-	    $change_aln .= $next_change_seq;
+	    my $tmp_fixed_start = ($cur_fixed_start < $fixed_start ?
+				   $fixed_start : $cur_fixed_start);
+	    my $tmp_fixed_stop  = ($cur_fixed_stop > $fixed_stop ?
+				   $fixed_stop  : $cur_fixed_stop);
+	    #Sanity check 2 (after changes)
+	    if(length($tmp_replace_seq) !=
+	       ($tmp_fixed_stop - $tmp_fixed_start + 1))
+	      {error("getAlnSegment failed sanity check 2 for the fixed aln ",
+		     "section [$tmp_fixed_start-$tmp_fixed_stop]: ",
+		     "[$tmp_replace_seq]")}
+
+	    $replace_seq .= $tmp_replace_seq;
 
 	    #If we've gotten all the sequence we were looking for, move on
-	    last if($cur_change_stop >= $change_stop);
+	    last if($cur_fixed_stop >= $fixed_stop);
 	  }
       }
+
+    if(!defined($cur_fixed_stop) || $cur_fixed_stop < $fixed_stop)
+      {
+	error("Did not make it to the target coordinate: ",
+	      "[$fixed_seqid:$fixed_stop] (converted from coordinate: ",
+	      "[$change_seqid:$change_stop]).  The last coordinate processed ",
+	      "was [",(defined($cur_fixed_stop) ? $cur_fixed_stop : 'undef'),
+	      "].  Map incomplete.");
+	return(undef,undef);
+      }
+    #Sanity check
+    elsif(length($replace_seq) != ($fixed_stop - $fixed_start + 1))
+      {error("Fixed aln [$replace_seq] failed sanity check [$fixed_start-",
+	     "$fixed_stop]")}
+
+    #Obtain the segment of the alignment containing the sequence of the segment
+    #we're going to be changing upon return and basically just the sequence
+    #positions/gaps from the partner sequence that we will be replacing from
+    #the map
+    my($fixed_aln,$change_aln) =
+      getAlnSegment($pairid,
+		    $fixed_seqid,
+		    $change_seqid,
+		    $change_start,
+		    $change_stop,
+		    $data);
+
+    #Replace the sequence in the fixed aligned string with what we got from the
+    #map
+    $fixed_aln = replaceAlnSegment($fixed_aln,
+				   $replace_seq);
 
     #Now we can return the sequences
     return($fixed_aln,$change_aln);
@@ -3329,12 +4253,10 @@ sub getAlnSegment
   {
     my $pairid      = $_[0];
     my $getseqid    = $_[1];
-    my $get_start   = $_[2];
-    my $get_stop    = $_[3];
-    my $query_seqid = $_[4];
-    my $query_start = $_[5];
-    my $query_stop  = $_[6];
-    my $data        = $_[7];
+    my $query_seqid = $_[2];
+    my $query_start = $_[3];
+    my $query_stop  = $_[4];
+    my $data        = $_[5];
 
     my $target_aln = $data->{$pairid}->{ALNS}->{$getseqid};
     my $query_aln  = $data->{$pairid}->{ALNS}->{$query_seqid};
@@ -3348,8 +4270,7 @@ sub getAlnSegment
     my $query_aln_segment  = '';
 
     #While we are not yet at the end of the captured segment
-    while(($cur_target_pos < $get_stop || $cur_query_pos < $query_stop) &&
-	  $aln_pos < $max_pos)
+    while($cur_query_pos < $query_stop && $aln_pos < $max_pos)
       {
 	my $target_char = substr($target_aln,$aln_pos,1);
 	my $query_char  = substr($query_aln, $aln_pos,1);
@@ -3361,40 +4282,21 @@ sub getAlnSegment
 	if($query_char ne '-')
 	  {$cur_query_pos++}
 
-	if($cur_target_pos >= $get_start || $cur_query_pos >= $query_start)
+	if($cur_query_pos >= $query_start)
 	  {
-	    if(($cur_target_pos + 1) < $get_start ||
-	       ($cur_query_pos  + 1) < $query_start)
-	      {error("The sequence positions (target: [$get_start] & query: ",
-		     "[$query_start]) submitted for the 2 aligned sequences ",
-		     "in alignment [$pairid] do not agree.",
-		     {DETAIL =>
-		      join('',("They should start at the same place in the ",
-			       "alignment [$aln_pos] (or one less when there ",
-			       "are gap characters) but the current ",
-			       "positions are: (target: [$cur_target_pos] & ",
-			       "query: [$cur_query_pos])."))})}
-	    if(($cur_target_pos) > $get_stop ||
-	       ($cur_query_pos)  > $query_stop)
-	      {error("The sequence positions (target: [$get_stop] & query: ",
-		     "[$query_stop]) submitted for the 2 aligned sequences ",
-		     "in alignment [$pairid] do not agree.",
-		     {DETAIL =>
-		      join('',("They should stop at the same place in the ",
-			       "alignment [$aln_pos] (or one less when there ",
-			       "are gap characters) but the current ",
-			       "positions are: (target: [$cur_target_pos] & ",
-			       "query: [$cur_query_pos])."))})}
 	    $target_aln_segment .= $target_char;
 	    $query_aln_segment  .= $query_char;
 	  }
       }
 
-    return($target_aln_segment,$cur_query_pos);
+    return($target_aln_segment,$query_aln_segment);
   }
 
 #Replace the sequence portion of an alignment with the characters from another
-#unaligned sequence
+#unaligned sequence.  Note, we are basically inserting the characters from one
+#alignment (optimized for one another) into another alignment.  Any gaps in the
+#new alignment will cause the original sequence aligned with that gaps to not
+#change, thus any extra sequence sent in is tacked on unchanged.
 sub replaceAlnSegment
   {
     my $aln_seq     = $_[0];
@@ -3408,17 +4310,28 @@ sub replaceAlnSegment
 	my $char = substr($aln_seq,$aln_pos,1);
 	if($char ne '-')
 	  {
-	    $new_aln .= substr($replace_seq,$seq_pos,1);
+	    #The replace sequence passed in is the sequence that best matched
+	    #the sequence this sequence is being aligned with.  If that
+	    #sequence that this sequence is aligned with had a gap at the end
+	    #of this segment, then that portion of sequence can't change, so we
+	    #just need to tac it on.
+	    if(($seq_pos + 1) > length($replace_seq))
+	      {$new_aln .= $char}
+	    else
+	      {$new_aln .= substr($replace_seq,$seq_pos,1)}
 	    $seq_pos++;
 	  }
 	else
 	  {$new_aln .= '-'}
       }
 
-    if($seq_pos != length($replace_seq))
+    if($seq_pos < length($replace_seq))
       {error("The number of non-gap characters in the alignment sequence ",
-	     "[$aln_seq] was not the same as the unaligned replacement ",
-	     "sequence: [$replace_seq].")}
+	     "[$aln_seq] was less than the unaligned replacement sequence: ",
+	     "[$replace_seq].")}
+    elsif($seq_pos > length($replace_seq))
+      {debug("Replaced a portion of a larger sequence.  Assuming there was a ",
+	     "gap.")}
 
     return($new_aln);
   }
@@ -3445,7 +4358,7 @@ sub outputHybrids
 
     openOut(*OUT,$outfile) || return();
 
-    foreach my $seqid (keys(%$seq_hash))
+    foreach my $seqid (sort {$a cmp $b} keys(%$seq_hash))
       {print(">$seqid\n",$seq_hash->{$seqid},"\n")}
 
     closeOut(*OUT);
@@ -3497,7 +4410,7 @@ sub loadAlignment
 
     openIn(*ALN,$alnfile) || return(2);
 
-    while(my $rec = getNextSeqRec(*ALN,0,$alnfile))
+    while(my $rec = getNextSeqRec(*ALN,0,$alnfile,'fasta'))
       {
 	$recnum++;
 	if($recnum > 2)
@@ -3587,14 +4500,15 @@ sub loadSegments
   {
     my $hash          = $_[0];
     my $stretch_sizes = $_[1];
-    my $id1           = $_[1]; #SeqID1
-    my $id2           = $_[2]; #SeqID2
-    my $aln1          = $_[3];
-    my $aln2          = $_[4];
+    my $id1           = $_[2]; #SeqID1
+    my $id2           = $_[3]; #SeqID2
+    my $aln1          = $_[4];
+    my $aln2          = $_[5];
 
     my $aln_len = length($aln1);
     if(length($aln2) != $aln_len)
-      {error("Aligned sequences not the same length.")}
+      {error("Aligned sequences not the same length.",
+	     {DETAIL => "$id1: $aln1\n$id2: $aln2"})}
 
     #For each segment size we're trying to optimize
     foreach my $sz (@$stretch_sizes)
@@ -3716,20 +4630,25 @@ sub loadSegments
 	    $spacing_score += $score;
 	  }
 
+	verbose({LEVEL => 2},"Populating regions.");
+
 	#Record the regions as indexes of identity segments broken up by the
 	#non-overlapping region they are closest to (given an ideal spacing
 	#scheme).  These indexes will be used later to try and select segments
 	#in a greedy fashion such that the first ones we attempt to add will
 	#fit something from every alignment
-	if(scalar(@{$regions->{$sz}->{$id1}}) >
-	   scalar(@{$regions->{$sz}->{$id2}}) ||
-	   (scalar(@{$regions->{$sz}->{$id1}}) ==
-	    scalar(@{$regions->{$sz}->{$id2}}) && $score1 < $score2))
+	if(scalar(keys(%{$regions->{$sz}->{$id1}})) >
+	   scalar(keys(%{$regions->{$sz}->{$id2}})) ||
+	   (scalar(keys(%{$regions->{$sz}->{$id1}})) ==
+	    scalar(keys(%{$regions->{$sz}->{$id2}})) && $score1 < $score2))
 	  {
 	    my $regidx = 0;
 	    foreach my $regkey (sort {$a <=> $b}
 				keys(%{$regions->{$sz}->{$id1}}))
 	      {
+		debug({LEVEL => 2},"Size [$sz], region [$regidx] is getting [",
+		      scalar(@{$regions->{$sz}->{$id1}->{$regkey}}),
+		      "] segment indexes sorted by score.");
 		$hash->{REGS}->{$sz}->[$regidx] =
 		  [map {$_->[0]} sort {$a->[1] <=> $b->[1]}
 		   @{$regions->{$sz}->{$id1}->{$regkey}}];
@@ -3742,12 +4661,21 @@ sub loadSegments
 	    foreach my $regkey (sort {$a <=> $b}
 				keys(%{$regions->{$sz}->{$id2}}))
 	      {
+		debug({LEVEL => 2},"Size [$sz], region [$regidx] is getting [",
+		      scalar(@{$regions->{$sz}->{$id2}->{$regkey}}),
+		      "] segment indexes sorted by score.");
 		$hash->{REGS}->{$sz}->[$regidx] =
 		  [map {$_->[0]} sort {$a->[1] <=> $b->[1]}
 		   @{$regions->{$sz}->{$id2}->{$regkey}}];
 		$regidx++;
 	      }
 	  }
+
+	#If there are any regions with no segments, create empty arrays for
+	#them
+	foreach my $regidx (0..($num_unique_segs - 1))
+	  {if(!defined($hash->{REGS}->{$sz}->[$regidx]))
+	     {$hash->{REGS}->{$sz}->[$regidx] = []}}
 
 	$hash->{NUMUNIQSEGS}->{$sz}  = $num_unique_segs;
 	$hash->{NUMBASES}->{$sz}     = $num_seg_bases;
