@@ -2814,38 +2814,50 @@ sub setMapDividers
 	       $div_map->{$seqid}->{$divider_left}->{TYPE} eq 'SOURCE' &&
 	       $div_map->{$seqid}->{$divider_left}->{PAIR_ID} ne
 	       $rec->{PAIR_ID})
-	      {debug("Sequence [$seqid] has multiple source alignments: [",
-		     $div_map->{$seqid}->{$divider_left}->{PAIR_ID},
-		     "] and [$rec->{PAIR_ID}].  Both alignments are marked ",
-		     "as being the source for a divider starting left of an ",
-		     "identity segment at sequence-relative position [$seqid:",
-		     "segment:$rec->{FINAL_START} divider:$divider_left].  ",
-		     "Ignoring alignment [$rec->{PAIR_ID}].  This should be ",
-		     "checked manually to confirm that their identity ",
-		     "segments are encoded the same in both alignments.  ",
-		     "Even though completely overlapping redundant identical ",
-		     "segments were aribtrarily removed from a sequence that ",
-		     "was aligned independently with 2 other sequences, the ",
-		     "segments still exist in the partners, which will ",
-		     "trigger the copying of the same divider (from ",
-		     "different sources) to the common sequence record - and ",
-		     "is OK - as long as it's confirmed that this is what's ",
-		     "happening.  One possible complication is if the ",
-		     "identity in one pair is larger than in the other ",
-		     "pair.  The other pair's segment would have been ",
-		     "eliminated (since it was completely overlapping) and ",
-		     "its partner would copy a unique divider at its start ",
-		     "and 1 after the stop, changing the source ",
-		     "unnecessarily, but since they MUST be identical ",
-		     "anyway, it only results in making it more complicated ",
-		     "than it needs to be.",{LEVEL => 3})}
+	      {
+		#If this was a copied divider, fill in the identity coodinates
+		if($div_map->{$seqid}->{$divider_left}->{IDEN_START} == 0)
+		  {
+		    $div_map->{$seqid}->{$divider_left}->{IDEN_START} =
+		      $rec->{IDEN_START};
+		    $div_map->{$seqid}->{$divider_left}->{IDEN_STOP} =
+		      $rec->{IDEN_STOP};
+		  }
+		debug("Sequence [$seqid] has multiple source alignments: [",
+		      $div_map->{$seqid}->{$divider_left}->{PAIR_ID},
+		      "] and [$rec->{PAIR_ID}].  Both alignments are marked ",
+		      "as being the source for a divider starting left of an ",
+		      "identity segment at sequence-relative position ",
+		      "[$seqid:segment:$rec->{FINAL_START} divider:",
+		      "$divider_left].  Ignoring alignment [$rec->{PAIR_ID}",
+		      "].  This should be checked manually to confirm that ",
+		      "their identity segments are encoded the same in both ",
+		      "alignments.  Even though completely overlapping ",
+		      "redundant identical segments were aribtrarily removed ",
+		      "from a sequence that was aligned independently with 2 ",
+		      "other sequences, the segments still exist in the ",
+		      "partners, which will trigger the copying of the same ",
+		      "divider (from different sources) to the common ",
+		      "sequence record - and is OK - as long as it's ",
+		      "confirmed that this is what's happening.  One ",
+		      "possible complication is if the identity in one pair ",
+		      "is larger than in the other pair.  The other pair's ",
+		      "segment would have been eliminated (since it was ",
+		      "completely overlapping) and its partner would copy a ",
+		      "unique divider at its start and 1 after the stop, ",
+		      "changing the source unnecessarily, but since they ",
+		      "MUST be identical anyway, it only results in making ",
+		      "it more complicated than it needs to be.",{LEVEL => 3});
+	      }
 	    else
 	      {
 		$div_map->{$seqid}->{$divider_left} =
-		  {PAIR_ID => $rec->{PAIR_ID},
-		   TYPE    => 'SOURCE',
-		   STOP    => undef,
-		   SEQ     => ''};
+		  {PAIR_ID    => $rec->{PAIR_ID},
+		   TYPE       => 'SOURCE',
+		   STOP       => undef,
+		   IDEN_START => $rec->{IDEN_START}, #Might be outside the
+		   IDEN_STOP  => $rec->{IDEN_STOP},  #coords, but that's OK
+		   SEQ        => ''};
 	      }
 
 	    #Copy this divider to the partner sequences
@@ -2869,10 +2881,12 @@ sub setMapDividers
 		      "might) be responsible for Ns at the beginning of the ",
 		      "sequence.");
 		$div_map->{$seqid}->{1} =
-		  {PAIR_ID => $rec->{PAIR_ID},
-		   TYPE    => undef,
-		   STOP    => undef,
-		   SEQ     => ''}
+		  {PAIR_ID    => $rec->{PAIR_ID},
+		   TYPE       => undef,
+		   STOP       => undef,
+		   IDEN_START => 0,
+		   IDEN_STOP  => 0,
+		   SEQ        => ''}
 		#No need to copy it, because it's not real.  It's just a place-
 		#holder that could get copied over.
 	      }
@@ -2931,10 +2945,12 @@ sub setMapDividers
 		     "than it needs to be.",{LEVEL => 3})}
 	    else
 	      {$div_map->{$seqid}->{$divider_right} =
-		 {PAIR_ID => $rec->{PAIR_ID},
-		  TYPE    => undef,  #Don't know seg this belongs to yet, so
-		  STOP    => undef,  #allow it to be over-written with another
-		  SEQ     => ''}}    #pair's copy by setting as undef
+		 {PAIR_ID    => $rec->{PAIR_ID},
+		  IDEN_START => 0,
+		  IDEN_STOP  => 0,
+		  TYPE       => undef,  #Don't know seg this belongs to yet, so
+		  STOP       => undef,  #allow it to be over-written with
+		  SEQ        => ''}}    #another pair's copy by setting = undef
 
 	    #Copy this divider to the partner sequences
 	    copyDivider($divider_right,
@@ -2960,10 +2976,12 @@ sub setMapDividers
 		      "divider [$divider_right] was not the sequence length ",
 		      "+ 1 [$dr].",{LEVEL => 3});
 		$div_map->{$seqid}->{$dr} =
-		  {PAIR_ID => $rec->{PAIR_ID},
-		   TYPE    => undef,
-		   STOP    => undef,
-		   SEQ     => ''}
+		  {PAIR_ID    => $rec->{PAIR_ID},
+		   TYPE       => undef,
+		   STOP       => undef,
+		   IDEN_START => 0,
+		   IDEN_STOP  => 0,
+		   SEQ        => ''}
 		#No need to copy it, because it's not real.  It's just a place-
 		#holder that could get copied over.
 	      }
@@ -3367,16 +3385,20 @@ sub copyDivider
 	    #sequence, set the pair ID in the div map
 	    if($pair_id eq $partner_pair_id)
 	      {$div_map->{$partner_seqid}->{$partner_divider} =
-		 {PAIR_ID => $pair_id,
-		  TYPE    => ($side eq 'left' ? 'SOURCE' : undef),
-		  STOP    => undef,
-		  SEQ     => ''}}
+		 {PAIR_ID    => $pair_id,
+		  TYPE       => ($side eq 'left' ? 'SOURCE' : undef),
+		  STOP       => undef,
+		  IDEN_START => 0, #This will hopefully get replaced when the
+		  IDEN_STOP  => 0, #source is handled directly
+		  SEQ        => ''}}
 	    else
 	      {$div_map->{$partner_seqid}->{$partner_divider} =
-		 {PAIR_ID => $pair_id,
-		  TYPE    => ($side eq 'left' ? 'RECODE' : undef),
-		  STOP    => undef,
-		  SEQ     => ''}}
+		 {PAIR_ID    => $pair_id,
+		  TYPE       => ($side eq 'left' ? 'RECODE' : undef),
+		  STOP       => undef,
+		  IDEN_START => 0,
+		  IDEN_STOP  => 0,
+		  SEQ        => ''}}
 	  }
 	else
 	  {
@@ -3676,6 +3698,8 @@ sub getPartnerPairSeqIDs
 #{PAIR_ID => $id,
 # TYPE    => 'SOURCE' or 'RECODE' (from what the partner sequence actually is),
 # STOP    => $stop,
+# IDEN_START => $iden_start,  #This is so we can represent the identity segs as
+# IDEN_STOP  => $iden_stop,   #capital letters
 # SEQ     => $seq} (This is what this subroutine fills in.)
 #There should be a divider for the first coordinate and the coordinate after
 #the last coordinate (i.e. sequence length + 1).  Forst coordinate is 1, not 0.
@@ -3821,6 +3845,11 @@ sub weaveSeqs
 
 	    verboseOverMe("Assembing.  [$seqid:$start-$stop]");
 
+	    debug({LEVEL => 4},"$seqid:$start-$stop",
+		  ($map->{$seqid}->{$divider}->{IDEN_START} > 0 ?
+		   " $map->{$seqid}->{$divider}->{IDEN_START}-" .
+		   "$map->{$seqid}->{$divider}->{IDEN_STOP}" : ''));
+
 	    if(($laststop + 1) != $start)
 	      {
 		my $size = $start - $laststop - 1;
@@ -3857,8 +3886,6 @@ sub weaveSeqs
 
     if(isVerbose())
       {print STDERR "\n"}
-
-    verbose("Editing codons to satisfy overlap...");
 
     #Edit the sequences to add the alternate codons (and while we're at it,
     #we'll error-check that the sequences were created, the correct length, and
@@ -3902,8 +3929,8 @@ sub weaveSeqs
 	  }
 
 	#Check that the sequences encode the same AA sequence
-	my $any_orig_aa = translate($any_orig_seq,     $codon_hash->{REV});
-	my $mixed_aa    = translate($seqhash->{$seqid},$codon_hash->{REV});
+	my $any_orig_aa = uc(translate($any_orig_seq,     $codon_hash->{REV}));
+	my $mixed_aa    = uc(translate($seqhash->{$seqid},$codon_hash->{REV}));
 	if($any_orig_aa ne $mixed_aa)
 	  {error("The new mixed hybrid version of sequence [$seqid]'s ",
 		 "translation differs from the original alignment ",
@@ -3920,6 +3947,33 @@ sub weaveSeqs
     verbose("^ = Confirmed to encode the same amino acid sequence compared ",
 	    "to 1 arbitrarily selected alignment.\n* = As compared to 1 ",
 	    "arbitrarily selected alignment.");
+
+    #Now let's make captial letters represent
+    foreach my $seqid (sort {$a cmp $b} keys(%$map))
+      {
+	$seqhash->{$seqid} = lc($seqhash->{$seqid});
+	foreach my $divider (sort {$a <=> $b} keys(%{$map->{$seqid}}))
+	  {
+	    #Next if this segment doesn't containg any identity
+	    next if($map->{$seqid}->{$divider}->{IDEN_START} == 0);
+
+	    my $iden_start = $map->{$seqid}->{$divider}->{IDEN_START};
+	    my $iden_stop  = $map->{$seqid}->{$divider}->{IDEN_STOP};
+
+	    my $tmp_seq = '';
+	    if($iden_start > 1)
+	      {$tmp_seq .= substr($seqhash->{$seqid},0,($iden_start - 1))}
+	    $tmp_seq .= uc(substr($seqhash->{$seqid},
+				  ($iden_start - 1),
+				  ($iden_stop - $iden_start + 1)));
+	    if($iden_stop < length($seqhash->{$seqid}))
+	      {$tmp_seq .= substr($seqhash->{$seqid},$iden_stop)}
+	    if(uc($seqhash->{$seqid}) ne uc($tmp_seq))
+	      {error("Identity-capitalized string construction problem.  ",
+		     "Sequence changed.")}
+	    $seqhash->{$seqid} = $tmp_seq;
+	  }
+      }
 
     return($seqhash);
   }
