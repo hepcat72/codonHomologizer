@@ -5800,13 +5800,14 @@ sub getStrSubParams
   {
     my $keys_array = [];
     #If a list of keys to search for was not provided
-    if(scalar(@_) < 2 || ref($_[0]) ne 'ARRAY' ||
+    if(scalar(@_) < 1 || ref($_[0]) ne 'ARRAY' ||
        scalar(grep {ref(\$_) ne 'SCALAR'} @{$_[0]}))
       {
 	#Issue a warning and allow it to proceed for backward compatibility
-	warning("A minimum of 2 parameters are required, the first being an ",
-		"array reference with scalar values. Returning the contents ",
-		"of all hashes.");
+	warning("A minimum of 1 parameter is required, and the first must be ",
+		"an array reference with scalar values.",
+		(scalar(@_) ? ("  Returning the contents of all hashes for " .
+			       "backward compatibility.") : ''));
       }
     else
       {$keys_array = shift(@_)}
@@ -12428,7 +12429,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.077';
+    $VERSION       = '4.078';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
@@ -12676,7 +12677,7 @@ Add an option/flag to the command line interface that a user can supply on the c
 
 GETOPTKEY is the key that is supplied to Getopt::Long's GetOptions method.  It is required to use '=s' at the end of the key to indicate that the flag expects a string value.  This is so that multiuple values can be supplied to a single flag, space-delimited.
 
-GETOPTVAL takes a reference to an array onto which values supplied on the command line will be pushed.  This is the value that is supplied to Getopt::Long's GetOptions method.  The reference must be defined before passing it to addArrayOption.
+GETOPTVAL takes a reference to an array onto which values supplied on the command line will be pushed.  This is the value that is supplied to Getopt::Long's GetOptions method.  The reference must be defined before passing it to add2DArrayOption.
 
 If REQUIRED is a non-zero value (e.g. '1'), the script will quit with an error and a usage message if at least 1 value is not supplied by the user on the command line.  If required is not supplied or set to 0, the flag will be treated as optional.
 
@@ -12743,7 +12744,7 @@ The reference supplied to GETOPTVAL must be an array reference.  There is no acc
 
 I<ADVANCED>
 
-Note that the GETOPTVAL array variable supplied is not populated until processCommandLine() has been called.  Once processCommandLine() has been called, no further calls to addArrayOption() are allowed.
+Note that the GETOPTVAL array variable supplied is not populated until processCommandLine() has been called.  Once processCommandLine() has been called, no further calls to add2DArrayOption() are allowed.
 
 If an array is pre-populated with default values, the default is not replaced, but rather is added to.  In order to set a default value, the prgrammer must set the default after the command line has been processed, if the user did not set a value.
 
@@ -12757,7 +12758,7 @@ GETOPTVAL takes a reference to an array onto which values supplied on the comman
 
 If REQUIRED is a non-zero value (e.g. '1'), the script will quit with an error and a usage message if at least 1 value is not supplied by the user on the command line.  If required is not supplied or set to 0, the flag will be treated as optional.
 
-The DEFAULT parameter is not used to initialize the GETOPTVAL value, but rather is a scalar (or reference to an array of scalar) simply describing/defining the default in the usage message for this parameter.
+The DEFAULT parameter is not used to initialize the GETOPTVAL value, but rather is a scalar (or reference to an array of scalars) simply describing/defining the default in the usage message for this parameter.  Setting the default value if no value is supplied by the user, is a job for the programmer.
 
 If HIDDEN is a non-zero value (e.g. '1'), the flag/option created by this method will not be a part of the usage output.  Note that if HIDDEN is non-zero, a DEFAULT must be supplied.
 
