@@ -372,11 +372,12 @@ The aligned nucleotide sequence file can be in fasta or fastq format.  There mus
 END_FORMAT
 		 );
 
-my $rpt_stretch_mins = [5,11];
+my $rpt_stretch_mins     = [];
+my $rpt_stretch_mins_def = [5,11];
 addArrayOption(GETOPTKEY   => 'stretch-reporting-min=s',
 	       GETOPTVAL   => $rpt_stretch_mins,
 	       REQUIRED    => 0,
-	       DEFAULT     => $rpt_stretch_mins,
+	       DEFAULT     => $rpt_stretch_mins_def,
 	       HIDDEN      => 0,
 	       INTERPOLATE => 1,
 	       DETAIL_DESC => << "END_DETAIL"
@@ -386,11 +387,12 @@ After nucleotide sequence construction (see -o) or the submission of a nucleotid
 END_DETAIL
 	 );
 
-my $rpt_usage_maxes = [0.1];
+my $rpt_usage_maxes     = [];
+my $rpt_usage_maxes_def = [0.1];
 addArrayOption(GETOPTKEY   => 'usage-reporting-max=s',
 	       GETOPTVAL   => $rpt_usage_maxes,
 	       REQUIRED    => 0,
-	       DEFAULT     => $rpt_usage_maxes,
+	       DEFAULT     => $rpt_usage_maxes_def,
 	       HIDDEN      => 0,
 	       INTERPOLATE => 1,
 	       DETAIL_DESC => << "END_DETAIL"
@@ -631,22 +633,32 @@ if(getNumFileGroups($seq_file_type) == 0 && !defined($matrix_suffix) &&
 if((getNumFileGroups($seq_file_type) || getNumFileGroups($eval_file_type)) &&
    scalar(@$rpt_stretch_mins) == 0 || scalar(grep {/\D/} @$rpt_stretch_mins))
   {
-    error("Invalid value(s) for --stretch-reporting-min: [",
-	  join(' ',@$rpt_stretch_mins),"].",
-	  {DETAIL => ('There must be at least 1 value and all values must ' .
-		      'be unsigned integers.')});
-    quit(7);
+    if(scalar(@$rpt_stretch_mins) == 0)
+      {@$rpt_stretch_mins = @$rpt_stretch_mins_def}
+    else
+      {
+	error("Invalid value(s) for --stretch-reporting-min: [",
+	      join(' ',@$rpt_stretch_mins),"].",
+	      {DETAIL => ('There must be at least 1 value and all values ' .
+			  'must be unsigned integers.')});
+	quit(7);
+      }
   }
 
 if((getNumFileGroups($seq_file_type) || getNumFileGroups($eval_file_type)) &&
    scalar(@$rpt_usage_maxes) == 0 || scalar(grep {/[^\d\.]/}
 					    @$rpt_usage_maxes))
   {
-    error("Invalid value(s) for --usage-reporting-max: [",
-	  join(' ',@$rpt_stretch_mins),"].",
-	  {DETAIL => ('There must be at least 1 value and all values must ' .
-		      'be unsigned.')});
-    quit(8);
+    if(scalar(@$rpt_usage_maxes) == 0)
+      {@$rpt_usage_maxes = @$rpt_usage_maxes_def}
+    else
+      {
+	error("Invalid value(s) for --usage-reporting-max: [",
+	      join(' ',@$rpt_usage_maxes),"].",
+	      {DETAIL => ('There must be at least 1 value and all values ' .
+			  'must be unsigned.')});
+	quit(8);
+      }
   }
 
 #There can only be 1 codon usage file if an evaluation DNA alignment file has
