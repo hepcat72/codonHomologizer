@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.001';
+our $VERSION = '1.003';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -3663,7 +3663,7 @@ sub getClosestRightDivider
 					   $partner->[1],  #partner seq ID
 					   $data);
 
-	#Find the closest coord to the left
+	#Find the closest coord to the right
 	my($part_rght_seg_coord,$part_right_seg_pair) =
 	  getClosestRightSegCoord($partner->[1], #seqid
 				  $partner_coord,
@@ -3672,11 +3672,17 @@ sub getClosestRightDivider
 					 ->{$partner->[1]}));
 
 	#Convert the coordinate back to this sequence
-	my $orig_rght_seg_coord = convertDivider($partner->[1],  #partner seqID
-						 $part_rght_seg_coord,
-						 $partner->[0],  #pair ID
-						 $seqid,
-						 $data);
+	#Note, I had originally used convertDivider here, but that causes the
+	#following problem: If the query sequence has a segment from 1-6 and a
+	#partner aligns with an end-gap at the beinning (aligning with the
+	#query's coord 13) and the partner has a segment from 1-whatever, that
+	#1 gets converted back to 1 here in the query sequence instead of 13.
+	my $orig_rght_seg_coord =
+	  convertAlnSeqCoord($partner->[1],  #partner seqID
+			     $part_rght_seg_coord,
+			     $partner->[0],  #pair ID
+			     $seqid,
+			     $data);
 
 	#If this coordinate is closer, save it.
 	if($orig_rght_seg_coord < $closest)
@@ -4330,15 +4336,15 @@ sub weaveSeqs
 			#the loop over after this round
 			else
 			  {
-			    $unfinished = 1;
-			    verboseOverMe("Sourcing.  Unfinished segments: [",
-					  join(' ',map {"$_:$countdowns->{$_}"}
-					       sort {$a cmp $b}
-					       keys(%$countdowns)),
-					  "] ",
-					  "$seqid:$divider-",
-					  $map->{$seqid}->{$divider}->{STOP},
-					  " TBD");
+			    $unfinished++;
+			    verbose("Sourcing.  Unfinished segments: [",
+				    join(' ',map {"$_:$countdowns->{$_}"}
+					 sort {$a cmp $b}
+					 keys(%$countdowns)),
+				   "] ",
+				    "$seqid:$divider-",
+				    $map->{$seqid}->{$divider}->{STOP},
+				    " TBD");
 			  }
 		      }
 		    else #TYPE is 'SOURCE' - so grab the sequence directly
@@ -4369,15 +4375,15 @@ sub weaveSeqs
 	  }
       }
 
-    verboseOverMe("Sourcing.  Unfinished segments: [",
-		  join(' ',map {"$_:$countdowns->{$_}"} sort {$a cmp $b}
-		       keys(%$countdowns)),
-		  "] Done");
+    verbose("Sourcing.  Unfinished segments: [",
+	    join(' ',map {"$_:$countdowns->{$_}"} sort {$a cmp $b}
+		 keys(%$countdowns)),
+	    "] Done");
 
     if($unfinished)
       {error("Unexpected case.  Unable to determine which alignment every ",
 	     "segment of sequence (that will not be recoded) should come ",
-	     "from.")}
+	     "from.  $unfinished segments left unsourced.")}
 
     #Assign letter codes to each sequence
     my $curcode     = 'a';
@@ -4739,6 +4745,13 @@ sub reCodeLeftoverSegment
 			      $codon_hash);
 	    return(1);
 	  }
+elsif(defined($fixed_partner_aln) || defined($change_this_aln)){
+verbose("Will not change: $fixed_partner_aln\n",
+        "Should change:   $change_this_aln\n",
+        "But could not find a filled partner.");}
+else{
+verbose("No source sequence for [$partner_seqid] could be found to change sequence: [$seqid:$divider-$map->{$seqid}->{$divider}->{STOP}] in [$pairid]");
+}
       }
 
     #Could not find a completed partner sequence
