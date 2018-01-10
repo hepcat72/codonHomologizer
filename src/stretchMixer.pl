@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.003';
+our $VERSION = '1.004';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -3106,8 +3106,8 @@ sub setMapDividers
 				      $soln->{$seqid}->[$b]->{FINAL_START}}
 	  0..$#{$soln->{$seqid}};
 
-	#For each segment record (in order of ascending FINAL_START)
-	foreach my $pseudoind (@ordered_indexes)
+	#For each segment record index (in order of ascending FINAL_START)
+	foreach my $pseudoind (0..$#ordered_indexes)
 	  {
 	    my $recind  = $ordered_indexes[$pseudoind];
 	    my $rec     = $soln->{$seqid}->[$recind];
@@ -3189,7 +3189,14 @@ sub setMapDividers
 	      }
 	    else
 	      {
-debug({LEVEL => 4},(exists($div_map->{$seqid}) && exists($div_map->{$seqid}->{$divider_left}) ? 'Overwriting' : "Creating")," source divider $divider_left left of segment at $rec->{FINAL_START} for $seqid from $rec->{PAIR_ID} with identity coords $rec->{IDEN_START}-$rec->{IDEN_STOP}");
+		debug({LEVEL => 4},
+		      (exists($div_map->{$seqid}) &&
+		       exists($div_map->{$seqid}->{$divider_left}) ?
+		       'Overwriting' : "Creating")," source divider ",
+		      "$divider_left left of segment at $rec->{FINAL_START} ",
+		      "for $seqid from $rec->{PAIR_ID} with identity coords ",
+		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
+
 		$div_map->{$seqid}->{$divider_left} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => 'SOURCE',
@@ -3217,7 +3224,11 @@ debug({LEVEL => 4},(exists($div_map->{$seqid}) && exists($div_map->{$seqid}->{$d
 	       (!exists($div_map->{$seqid}) ||
 		!exists($div_map->{$seqid}->{1})))
 	      {
-debug({LEVEL => 4},"Creating UNDEF left edge divider 1 (in addition to divider [$divider_left]) left of segment at $rec->{FINAL_START} for $seqid from $rec->{PAIR_ID} with identity coords $rec->{IDEN_START}-$rec->{IDEN_STOP}");
+		debug({LEVEL => 4},"Creating UNDEF left edge divider 1 (in ",
+		      "addition to divider [$divider_left]) left of segment ",
+		      "at $rec->{FINAL_START} for $seqid from ",
+		      "$rec->{PAIR_ID} with identity coords ",
+		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
 		$div_map->{$seqid}->{1} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => undef,
@@ -3237,18 +3248,26 @@ debug({LEVEL => 4},"Creating UNDEF left edge divider 1 (in addition to divider [
 	    #boundary and record it in this sequence's map and copy/convert
 	    #it to all partner sequences's div_maps
 
-	    my $divider_right = getClosestRightDivider($seqid,
-						       $rec->{FINAL_STOP},
-						       $soln,
-						       $data,
-						       $partners,
-						       $div_map->{$seqid});
+	    my $divider_right =
+	      getClosestRightDivider($seqid,
+				     $rec->{FINAL_STOP},
+				     $soln,
+				     $data,
+				     $partners,
+				     $div_map->{$seqid});
 
-	    #Set the default as just after the end of the sequence just in case
-	    if(!defined($divider_right))
+	    #If the returned divider is indefined and we're at the end of the
+	    #ordered segments, set the default as just after the end of the
+	    #sequence just in case
+	    if(!defined($divider_right) && $pseudoind == $#ordered_indexes)
 	      {$divider_right =
 		 length($data->{$rec->{PAIR_ID}}->{SEQS}->{$seqid}) + 1}
-
+	    elsif(!defined($divider_right))
+	      {
+		$lastind = $recind;
+		$cnt++;
+		next;
+	      }
 	    #This divider might have been copied from another sequence, so
 	    #check it for a conflict before recording it
 	    if(exists($div_map->{$seqid}) &&
@@ -3284,14 +3303,19 @@ debug({LEVEL => 4},"Creating UNDEF left edge divider 1 (in addition to divider [
 		     "than it needs to be.",{LEVEL => 3})}
 	    else
 	      {
-debug({LEVEL => 4},"Creating right divider $divider_right right of segment at $rec->{FINAL_STOP} for $seqid from $rec->{PAIR_ID} with identity coords $rec->{IDEN_START}-$rec->{IDEN_STOP}");
-$div_map->{$seqid}->{$divider_right} =
-		 {PAIR_ID    => $rec->{PAIR_ID},
-		  IDEN_START => 0,
-		  IDEN_STOP  => 0,
-		  TYPE       => undef,  #Don't know seg this belongs to yet, so
-		  STOP       => undef,  #allow it to be over-written with
-		  SEQ        => ''}}    #another pair's copy by setting = undef
+		debug({LEVEL => 4},"Creating right divider $divider_right ",
+		      "right of segment at $rec->{FINAL_STOP} for $seqid ",
+		      "from $rec->{PAIR_ID} with identity coords ",
+		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
+
+		$div_map->{$seqid}->{$divider_right} =
+		  {PAIR_ID    => $rec->{PAIR_ID},
+		   IDEN_START => 0,
+		   IDEN_STOP  => 0,
+		   TYPE       => undef,  #Don't know seg this belongs to yet,
+		   STOP       => undef,  #so allow it to be over-written with
+		   SEQ        => ''};    #another pair's copy by setting =undef
+	      }
 
 	    #Copy this divider to the partner sequences
 	    copyDivider($divider_right,
@@ -3313,14 +3337,20 @@ $div_map->{$seqid}->{$divider_right} =
 					->{$seqid}) + 1 &&
 	       !exists($div_map->{$seqid}->{$dr}))
 	      {
-debug({LEVEL => 4},"Creating UNDEF right edge divider $dr right of segment at $rec->{FINAL_STOP} for $seqid from $rec->{PAIR_ID} with identity coords $rec->{IDEN_START}-$rec->{IDEN_STOP} because the last divider [$divider_right] was not the sequence length + 1 [$dr].",{LEVEL => 3});
+		debug({LEVEL => 4},"Creating UNDEF right edge divider $dr ",
+		      "right of segment at $rec->{FINAL_STOP} for $seqid ",
+		      "from $rec->{PAIR_ID} with identity coords ",
+		      "$rec->{IDEN_START}-$rec->{IDEN_STOP} because the last ",
+		      "divider [$divider_right] was not the sequence length ",
+		      "+ 1 [$dr].");
+
 		$div_map->{$seqid}->{$dr} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => undef,
 		   STOP       => undef,
 		   IDEN_START => 0,
 		   IDEN_STOP  => 0,
-		   SEQ        => ''}
+		   SEQ        => ''};
 		#No need to copy it, because it's not real.  It's just a place-
 		#holder that could get copied over.
 	      }
@@ -3476,7 +3506,11 @@ sub getClosestLeftDivider
 	#If this coordinate is closer and not overlapping, save it.
 	if($orig_left_seg_coord > $closest)
 	  {
-debug({LEVEL => 4},"Closest left segment to [@$partner $partner_coord] is [@$partner $part_left_seg_coord] and converted back to [$partner->[0] $seqid $orig_left_seg_coord]");
+	    debug({LEVEL => 4},"Closest left segment to [@$partner ",
+		  "$partner_coord] is [@$partner $part_left_seg_coord] and ",
+		  "converted back to [$partner->[0] $seqid ",
+		  "$orig_left_seg_coord]");
+
 	    #If the divider is inside the query coordinate, something went
 	    #wrong.  (If it's the same coordinate, it's OK.  We'll just use the
 	    #start of this identity segment as the location of the divider -
@@ -3500,10 +3534,13 @@ debug({LEVEL => 4},"Closest left segment to [@$partner $partner_coord] is [@$par
 	    if($orig_left_seg_coord == $coord)
 	      {return($coord)}
 	  }
-else
-  {
-debug({LEVEL => 4},"Further left segment to [@$partner $partner_coord] is [@$partner $part_left_seg_coord] and converted back to [$partner->[0] $seqid $orig_left_seg_coord]");
-}
+	else
+	  {
+	    debug({LEVEL => 4},"Further left segment to [@$partner ",
+		  "$partner_coord] is [@$partner $part_left_seg_coord] and ",
+		  "converted back to [$partner->[0] $seqid ",
+		  "$orig_left_seg_coord]");
+	  }
       }
 
     #See if there already exists a divider (or dividers) in this region.
@@ -3538,8 +3575,8 @@ debug({LEVEL => 4},"Further left segment to [@$partner $partner_coord] is [@$par
     #midpoint among available positions to put a divider.  That includes the
     #original $coord position, but not the last position of the nearest
     #neighbor to the left ($closest)
-#    my $midpoint = int(($closest + 1 + $coord) / 2);
-debug({LEVEL => 4},"Calculating midpoint using alignment [$closest_partner->[0]]");
+    debug({LEVEL => 4},"Calculating midpoint using alignment ",
+	  "[$closest_partner->[0]]");
     my $midpoint = getAlnMidpoint($closest_partner->[0],  #pairID
 				  $seqid,
 				  $closest + 1,
@@ -3687,7 +3724,10 @@ sub getClosestRightDivider
 	#If this coordinate is closer, save it.
 	if($orig_rght_seg_coord < $closest)
 	  {
-debug({LEVEL => 4},"Closest right segment to partner [@$partner $partner_coord] is [$part_right_seg_pair $partner->[1] $part_rght_seg_coord] (i.e. to self [$seqid:$coord+1]) is [$partner->[0] $seqid $orig_rght_seg_coord]");
+	    debug({LEVEL => 4},"Closest right segment to partner [@$partner ",
+		  "$partner_coord] is [$part_right_seg_pair $partner->[1] ",
+		  "$part_rght_seg_coord] (i.e. to self [$seqid:$coord+1]) is ",
+		  "[$partner->[0] $seqid $orig_rght_seg_coord]");
 
 	    #If the divider is inside the query coordinate, something went
 	    #wrong.  If it's to the immediate right, it's OK to use as a
@@ -3711,10 +3751,13 @@ debug({LEVEL => 4},"Closest right segment to partner [@$partner $partner_coord] 
 	    if(($orig_rght_seg_coord - 1) == $coord)
 	      {return($orig_rght_seg_coord)}
 	  }
-else
-  {
-debug({LEVEL => 4},"Further right segment to [@$partner $partner_coord] is [@$partner $part_rght_seg_coord] and converted back to [$partner->[0] $seqid $orig_rght_seg_coord]");
-  }
+	else
+	  {
+	    debug({LEVEL => 4},"Further right segment to [@$partner ",
+		  "$partner_coord] is [@$partner $part_rght_seg_coord] and ",
+		  "converted back to [$partner->[0] $seqid ",
+		  "$orig_rght_seg_coord]");
+	  }
       }
 
     #See if there already exists a divider (or dividers) in this region.
@@ -3749,8 +3792,8 @@ debug({LEVEL => 4},"Further right segment to [@$partner $partner_coord] is [@$pa
     #available positions to put a divider.  That includes the $closest
     #position, but not the $coord position (the last position of the query
     #segment)
-#    my $midpoint = int(($closest + $coord + 1) / 2);
-debug({LEVEL => 4},"Calculating midpoint using alignment [$closest_partner->[0]]");
+    debug({LEVEL => 4},"Calculating midpoint using alignment ",
+	  "[$closest_partner->[0]]");
     my $midpoint = getAlnMidpoint($closest_partner->[0],  #pairID
 				  $seqid,
 				  $coord + 1,
@@ -3910,33 +3953,43 @@ sub copyDivider
 	    #sequence, set the pair ID in the div map
 	    if($pair_id eq $partner_pair_id)
 	      {
-debug({LEVEL => 4},"Copying divider $seqid:$divider in $pair_id to $partner_seqid:$partner_divider as $pair_id");
-$div_map->{$partner_seqid}->{$partner_divider} =
-		 {PAIR_ID    => $pair_id,
-		  TYPE       => ($side eq 'left' ? 'SOURCE' : undef),
-		  STOP       => undef,
-		  IDEN_START => 0, #This will hopefully get replaced when the
-		  IDEN_STOP  => 0, #source is handled directly
-		  SEQ        => ''}}
+		debug({LEVEL => 4},"Copying divider $seqid:$divider in ",
+		      "$pair_id to $partner_seqid:$partner_divider as ",
+		      "$pair_id");
+
+		$div_map->{$partner_seqid}->{$partner_divider} =
+		  {PAIR_ID    => $pair_id,
+		   TYPE       => ($side eq 'left' ? 'SOURCE' : undef),
+		   STOP       => undef,
+		   IDEN_START => 0, #This will hopefully get replaced when the
+		   IDEN_STOP  => 0, #source is handled directly
+		   SEQ        => ''};
+	      }
 	    else
 	      {
-debug({LEVEL => 4},"Copying divider $seqid:$divider in $pair_id to $partner_seqid:$partner_divider as $partner_pair_id");
-$div_map->{$partner_seqid}->{$partner_divider} =
-		 {PAIR_ID    => $partner_pair_id,
-		  TYPE       => undef,#($side eq 'left' ? 'RECODE' : undef),
-		  STOP       => undef,
-		  IDEN_START => 0,
-		  IDEN_STOP  => 0,
-		  SEQ        => ''}}
+		debug({LEVEL => 4},"Copying divider $seqid:$divider in ",
+		      "$pair_id to $partner_seqid:$partner_divider as ",
+		      "$partner_pair_id");
+
+		$div_map->{$partner_seqid}->{$partner_divider} =
+		  {PAIR_ID    => $partner_pair_id,
+		   TYPE       => undef,#($side eq 'left' ? 'RECODE' : undef),
+		   STOP       => undef,
+		   IDEN_START => 0,
+		   IDEN_STOP  => 0,
+		   SEQ        => ''};
+	      }
 	  }
-	#If I turn on the code below this block, I must turn this one off, as it's an altenrative
+	#If I turn on the code below this block, I must turn this one off, as
+	#it's an altenrative
 	elsif($side eq 'left' && $pair_id eq $partner_pair_id)
 	  {
 	    $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} =
 	      $partner_pair_id;
 	    $div_map->{$partner_seqid}->{$partner_divider}->{TYPE} = 'SOURCE';
 	  }
-	#I turned this portion off - should delete if I determine it's wrong or unnecessary
+	#I turned this portion off - should delete if I determine it's wrong or
+	#unnecessary
 	elsif(0)
 	  {
 	    #If the existing divider was copied from a different pair
@@ -4344,7 +4397,8 @@ sub weaveSeqs
 				   "] ",
 				    "$seqid:$divider-",
 				    $map->{$seqid}->{$divider}->{STOP},
-				    " TBD");
+				    " TBD.  Should be based on [",
+				    "$map->{$seqid}->{$divider}->{PAIR_ID}].");
 			  }
 		      }
 		    else #TYPE is 'SOURCE' - so grab the sequence directly
@@ -4557,11 +4611,12 @@ sub weaveSeqs
 		 "translation differs from the original alignment ",
 		 "[$any_pair_id].",
 		 {DETAIL => "ORIG: [$any_orig_aa]\nNEW:  [$mixed_aa]"})}
-	elsif(isVerbose())
+	if(isVerbose())
 	  {
 	    my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
-	    verbose("[$seqid] Validated^.  [$n/",
-		    length($any_orig_seq),"] nts changed*.");
+	    verbose("[$seqid] ",($any_orig_aa eq $mixed_aa ? '' : 'NOT '),
+		    "Validated",($any_orig_aa eq $mixed_aa ? '^' : ''),
+		    ".  [$n/",length($any_orig_seq),"] nts changed*.");
 	  }
       }
 
