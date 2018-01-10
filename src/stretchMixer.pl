@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.004';
+our $VERSION = '1.005';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -3136,7 +3136,7 @@ sub setMapDividers
 						     $soln,
 						     $data,
 						     $partners,
-						     $div_map->{$seqid});
+						     $div_map);
 
 	    #Set the default as the beginning of the sequence just in case
 	    if(!defined($divider_left))
@@ -3254,7 +3254,7 @@ sub setMapDividers
 				     $soln,
 				     $data,
 				     $partners,
-				     $div_map->{$seqid});
+				     $div_map);
 
 	    #If the returned divider is indefined and we're at the end of the
 	    #ordered segments, set the default as just after the end of the
@@ -3543,26 +3543,69 @@ sub getClosestLeftDivider
 	  }
       }
 
-    #See if there already exists a divider (or dividers) in this region.
+    #See if there already exists a divider (or dividers) in this region in any
+    #of the partners (or self).
     #Dividers with slightly different coordinates are common because their
     #position is calculated using different alignments and the alignments can
     #be very gappy.
+
+    #First check myself...
     my $existing_divs = [sort {$b <=> $a}
 			 grep {$_ >= $closest && $_ <= $coord}
-			 keys(%$divs)];
+			 keys(%{$divs->{$seqid}})];
     if(scalar(@$existing_divs) > 1)
       {
 	debug("Multiple dividers found between segment boundaries: ",
 	      "[$closest_partner->[0]:$seqid:$closest] and ",
 	      "[$closest_partner->[0]:$seqid:$coord] that are deemed ",
 	      "'closest': [",
-	      join(' ',map {"$divs->{$_}->{PAIR_ID}:$seqid:$_"}
+	      join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
 		   @$existing_divs),"].");
 	return($existing_divs->[0]);
       }
     elsif(scalar(@$existing_divs) == 1)
       {return($existing_divs->[0])}
 
+    #Now check my partners
+    foreach my $partner (@$partners)
+      {
+	#Convert the coordinate to the partner sequence
+	my $partner_coord = convertDivider($seqid,
+					   $coord,
+					   $partner->[0],  #pair ID
+					   $partner->[1],  #partner seq ID
+					   $data);
+
+	#Convert the coordinate to the partner sequence
+	my $partner_closest = convertDivider($seqid,
+					     $closest,
+					     $partner->[0],  #pair ID
+					     $partner->[1],  #partner seq ID
+					     $data);
+
+	$existing_divs = [map {convertDivider($partner->[1],  #Conv back 2 self
+					      $_,
+					      $partner->[0],  #pair ID
+					      $seqid,  #partner seq ID
+					      $data)}
+			  sort {$b <=> $a}
+			  grep {$_ >= $partner_closest && $_ <= $partner_coord}
+			  keys(%{$divs->{$partner->[1]}})];
+
+	if(scalar(@$existing_divs) > 1)
+	  {
+	    debug("Multiple dividers found in partner between segment ",
+		  "self-boundaries: ",
+		  "[$closest_partner->[0]:$seqid:$closest] and ",
+		  "[$closest_partner->[0]:$seqid:$coord] that are deemed ",
+		  "'closest': [",
+		  join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
+		       @$existing_divs),"].");
+	    return($existing_divs->[0]);
+	  }
+	elsif(scalar(@$existing_divs) == 1)
+	  {return($existing_divs->[0])}
+      }
     #If this is the left-most edge pof the sequence, then we can return it,
     #otherwise, we mist find a mid-way dividing point between this identity
     #segment and the nearest one on the left
@@ -3760,25 +3803,74 @@ sub getClosestRightDivider
 	  }
       }
 
-    #See if there already exists a divider (or dividers) in this region.
+    #See if there already exists a divider (or dividers) in this region in any
+    #of the partners (or self).
     #Dividers with slightly different coordinates are common because their
     #position is calculated using different alignments and the alignments can
     #be very gappy.
+
+    #First check myself...
     my $existing_divs = [sort {$a <=> $b}
 			 grep {$_ >= $coord && $_ <= $closest}
-			 keys(%$divs)];
+			 keys(%{$divs->{$seqid}})];
     if(scalar(@$existing_divs) > 1)
       {
 	debug("Multiple dividers found between segment boundaries: ",
 	      "[$closest_partner->[0]:$seqid:$coord] and ",
 	      "[$closest_partner->[0]:$seqid:$closest] that are deemed ",
 	      "'closest': [",
-	      join(' ',map {"$divs->{$_}->{PAIR_ID}:$seqid:$_"}
+	      join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
 		   @$existing_divs),"].");
 	return($existing_divs->[0]);
       }
     elsif(scalar(@$existing_divs) == 1)
       {return($existing_divs->[0])}
+
+    #Now check my partners
+    foreach my $partner (@$partners)
+      {
+	#Convert the coordinate to the partner sequence
+	#Note, we're adding 1 to the coordinate becasue it is assumed that
+	#$coord is in frame 3 and the divider can only be in frame 1.
+	#convertDivider therefor can only take a frame 1 coordinate.
+	my $partner_coord = convertDivider($seqid,
+					   $coord + 1,
+					   $partner->[0],  #pair ID
+					   $partner->[1],  #partner seq ID
+					   $data);
+
+	#Convert the 'closest' coordinate to the partner sequence
+	#Note, we're adding 1 to the coordinate becasue it is assumed that
+	#$coord is in frame 3 and the divider can only be in frame 1.
+	#convertDivider therefor can only take a frame 1 coordinate.
+	my $partner_closest = convertAlnSeqCoord($seqid,
+						 $closest,
+						 $partner->[0],  #pair ID
+						 $partner->[1],  #partner seqID
+						 $data);
+
+	$existing_divs = [map {convertDivider($partner->[1],  #Conv back 2 self
+					      $_,
+					      $partner->[0],  #pair ID
+					      $seqid,  #partner seq ID
+					      $data)}
+			  sort {$a <=> $b}
+			  grep {$_ >= $partner_coord && $_ <= $partner_closest}
+			  keys(%{$divs->{$partner->[1]}})];
+	if(scalar(@$existing_divs) > 1)
+	  {
+	    debug("Multiple dividers found in partner between segment ",
+		  "self-boundaries: ",
+		  "[$closest_partner->[0]:$seqid:$coord] and ",
+		  "[$closest_partner->[0]:$seqid:$closest] that are deemed ",
+		  "'closest': [",
+		  join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
+		       @$existing_divs),"].");
+	    return($existing_divs->[0]);
+	  }
+	elsif(scalar(@$existing_divs) == 1)
+	  {return($existing_divs->[0])}
+      }
 
     #If the closest "segment" is the end of the sequence (plus 1), no need to
     #find the midpoint, because it's not a real segment - rather it's just the
