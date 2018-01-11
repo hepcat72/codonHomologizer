@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.005';
+our $VERSION = '1.006';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -3131,12 +3131,13 @@ sub setMapDividers
 	    #record it in this sequence's map and copy/convert it to all
 	    #partner sequences's div_maps.
 
-	    my $divider_left = getClosestLeftDivider($seqid,
-						     $rec->{FINAL_START},
-						     $soln,
-						     $data,
-						     $partners,
-						     $div_map);
+	    my($divider_left,$closest_left) =
+	      getClosestLeftDivider($seqid,
+				    $rec->{FINAL_START},
+				    $soln,
+				    $data,
+				    $partners,
+				    $div_map);
 
 	    #Set the default as the beginning of the sequence just in case
 	    if(!defined($divider_left))
@@ -3214,7 +3215,9 @@ sub setMapDividers
 			$data,
 			$rec->{PAIR_ID},
 		        'left',
-		        $soln);
+		        $soln,
+			$closest_left,
+			$rec->{FINAL_START});
 
 	    #Check to make sure that the very beginning of the sequence is
 	    #accounted for, because a divider could have been copied over and
@@ -3248,7 +3251,7 @@ sub setMapDividers
 	    #boundary and record it in this sequence's map and copy/convert
 	    #it to all partner sequences's div_maps
 
-	    my $divider_right =
+	    my($divider_right,$closest_right) =
 	      getClosestRightDivider($seqid,
 				     $rec->{FINAL_STOP},
 				     $soln,
@@ -3325,7 +3328,9 @@ sub setMapDividers
 			$data,
 			$rec->{PAIR_ID},
 		        'right',
-			$soln);
+			$soln,
+		        $rec->{FINAL_STOP},
+		        $closest_right);
 
 	    #Check to make sure that the very end of the sequence is accounted
 	    #for, because a divider could have been copied over and interrupted
@@ -3532,7 +3537,7 @@ sub getClosestLeftDivider
 	    $closest = $orig_left_seg_coord;
 	    $closest_partner = [@$partner,$part_left_seg_coord];
 	    if($orig_left_seg_coord == $coord)
-	      {return($coord)}
+	      {return($coord,$coord)}
 	  }
 	else
 	  {
@@ -3555,16 +3560,16 @@ sub getClosestLeftDivider
 			 keys(%{$divs->{$seqid}})];
     if(scalar(@$existing_divs) > 1)
       {
-	debug("Multiple dividers found between segment boundaries: ",
-	      "[$closest_partner->[0]:$seqid:$closest] and ",
-	      "[$closest_partner->[0]:$seqid:$coord] that are deemed ",
-	      "'closest': [",
-	      join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
-		   @$existing_divs),"].");
-	return($existing_divs->[0]);
+	warning("Multiple dividers found between segment boundaries: ",
+		"[$closest_partner->[0]:$seqid:$closest] and ",
+		"[$closest_partner->[0]:$seqid:$coord] that are deemed ",
+		"'closest': [",
+		join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
+		     @$existing_divs),"].");
+	return($existing_divs->[0],$closest);
       }
     elsif(scalar(@$existing_divs) == 1)
-      {return($existing_divs->[0])}
+      {return($existing_divs->[0],$closest)}
 
     #Now check my partners
     foreach my $partner (@$partners)
@@ -3594,23 +3599,23 @@ sub getClosestLeftDivider
 
 	if(scalar(@$existing_divs) > 1)
 	  {
-	    debug("Multiple dividers found in partner between segment ",
-		  "self-boundaries: ",
-		  "[$closest_partner->[0]:$seqid:$closest] and ",
-		  "[$closest_partner->[0]:$seqid:$coord] that are deemed ",
-		  "'closest': [",
-		  join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
-		       @$existing_divs),"].");
-	    return($existing_divs->[0]);
+	    warning("Multiple dividers found in partner between segment ",
+		    "self-boundaries: ",
+		    "[$closest_partner->[0]:$seqid:$closest] and ",
+		    "[$closest_partner->[0]:$seqid:$coord] that are deemed ",
+		    "'closest': [",
+		    join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
+			 @$existing_divs),"].");
+	    return($existing_divs->[0],$closest);
 	  }
 	elsif(scalar(@$existing_divs) == 1)
-	  {return($existing_divs->[0])}
+	  {return($existing_divs->[0],$closest)}
       }
     #If this is the left-most edge pof the sequence, then we can return it,
     #otherwise, we mist find a mid-way dividing point between this identity
     #segment and the nearest one on the left
     if($closest == 1)
-      {return($closest)}
+      {return($closest,$closest)}
 
     #We now have the closest occupied coordinate to the left of $coord.  We
     #need to split the difference and then return the closest frame 1 codon
@@ -3631,7 +3636,7 @@ sub getClosestLeftDivider
     my $frame_pos = ($midpoint - 1) % 3 + 1;
 
     if($frame_pos == 1)
-      {return($midpoint)}
+      {return($midpoint,$closest)}
     elsif($frame_pos == 2)
       {
 	if(($midpoint - 1) <= $closest)
@@ -3642,13 +3647,13 @@ sub getClosestLeftDivider
 		error("Bad frame boundary.  Frame 2.  Midpoint: ",
 		      "[$midpoint].  Closest: [$closest].  Coord(/final ",
 		      "start): [$coord].");
-		return($coord);
+		return($coord,$closest);
 	      }
 
-	    return($midpoint + 2);
+	    return($midpoint + 2,$closest);
 	  }
 
-	return($midpoint - 1);
+	return($midpoint - 1,$closest);
       }
     elsif($frame_pos == 3)
       {
@@ -3657,15 +3662,15 @@ sub getClosestLeftDivider
 	    error("Bad frame boundary for left divider.  Frame 3.  Midpoint: ",
 		  "[$midpoint].  Closest: [$closest].  Coord(/final start): ",
 		  "[$coord].");
-	    return($coord);
+	    return($coord,$closest);
 	  }
 
-	return($midpoint + 1);
+	return($midpoint + 1,$closest);
       }
     else
       {error("Unexpected frame result.")}
 
-    return($coord);
+    return($coord,$closest);
   }
 
 #Searches the segments of a solution for the closest right-side coordinate that
@@ -3742,7 +3747,7 @@ sub getClosestRightDivider
 					   $partner->[0],  #pair ID
 					   $partner->[1],  #partner seq ID
 					   $data);
-
+debug("Partner coordinate is ",(calcFrame($partner_coord) == 1 ? '' : 'NOT '),"in frame 1 - should always be frame 1 since the query was in frame 1");
 	#Find the closest coord to the right
 	my($part_rght_seg_coord,$part_right_seg_pair) =
 	  getClosestRightSegCoord($partner->[1], #seqid
@@ -3750,7 +3755,7 @@ sub getClosestRightDivider
 				  $soln,
 				  length($data->{$partner->[0]}->{SEQS}
 					 ->{$partner->[1]}));
-
+debug("The closest segment's start to the right returned is ",(calcFrame($part_rght_seg_coord) == 1 ? '' : 'NOT (' . calcFrame($part_rght_seg_coord) . ') '),"in frame 1 - should always be frame 1 since the query above should have been in frame 1");
 	#Convert the coordinate back to this sequence
 	#Note, I had originally used convertDivider here, but that causes the
 	#following problem: If the query sequence has a segment from 1-6 and a
@@ -3763,7 +3768,13 @@ sub getClosestRightDivider
 			     $partner->[0],  #pair ID
 			     $seqid,
 			     $data);
-
+	#If $part_rght_seg_coord aligns inside a large gap, the returned value
+	#will be in frame 3 because convertAlnSeqCoord returns the last
+	#sequence coordinate counted.  We add 1 to assume that that is the
+	#closest corresponding segment.
+	if(calcFrame($orig_rght_seg_coord) == 3)
+	  {$orig_rght_seg_coord++}
+debug("The conversion back is ",(calcFrame($orig_rght_seg_coord) == 1 ? '' : 'NOT (' . calcFrame($orig_rght_seg_coord) . ') '),"in frame 1 - should always be frame 1 since the query above should have been in frame 1");
 	#If this coordinate is closer, save it.
 	if($orig_rght_seg_coord < $closest)
 	  {
@@ -3792,7 +3803,7 @@ sub getClosestRightDivider
 	    $closest = $orig_rght_seg_coord;
 	    $closest_partner = [@$partner,$part_rght_seg_coord];
 	    if(($orig_rght_seg_coord - 1) == $coord)
-	      {return($orig_rght_seg_coord)}
+	      {return($orig_rght_seg_coord,$orig_rght_seg_coord)}
 	  }
 	else
 	  {
@@ -3815,16 +3826,19 @@ sub getClosestRightDivider
 			 keys(%{$divs->{$seqid}})];
     if(scalar(@$existing_divs) > 1)
       {
-	debug("Multiple dividers found between segment boundaries: ",
-	      "[$closest_partner->[0]:$seqid:$coord] and ",
-	      "[$closest_partner->[0]:$seqid:$closest] that are deemed ",
-	      "'closest': [",
-	      join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
-		   @$existing_divs),"].");
-	return($existing_divs->[0]);
+	warning("Multiple dividers found between segment boundaries: ",
+		"[$closest_partner->[0]:$seqid:$coord] and ",
+		"[$closest_partner->[0]:$seqid:$closest] that are deemed ",
+		"'closest': [",
+		join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
+		     @$existing_divs),"].");
+	return($existing_divs->[0],$closest);
       }
     elsif(scalar(@$existing_divs) == 1)
-      {return($existing_divs->[0])}
+      {
+	debug("Returning pre-existing divider: $seqid:$existing_divs->[0]");
+	return($existing_divs->[0],$closest);
+      }
 
     #Now check my partners
     foreach my $partner (@$partners)
@@ -3840,15 +3854,12 @@ sub getClosestRightDivider
 					   $data);
 
 	#Convert the 'closest' coordinate to the partner sequence
-	#Note, we're adding 1 to the coordinate becasue it is assumed that
-	#$coord is in frame 3 and the divider can only be in frame 1.
-	#convertDivider therefor can only take a frame 1 coordinate.
 	my $partner_closest = convertAlnSeqCoord($seqid,
 						 $closest,
 						 $partner->[0],  #pair ID
 						 $partner->[1],  #partner seqID
 						 $data);
-
+debug({LEVEL => 5},"Checking partner [$partner->[1]] dividers between $partner_coord && $partner_closest - calculated from alignment $partner->[0] using $seqid:$coord+1 and $seqid:$closest Frame of $closest is ",calcFrame($closest)," - This should always be the same.");
 	$existing_divs = [map {convertDivider($partner->[1],  #Conv back 2 self
 					      $_,
 					      $partner->[0],  #pair ID
@@ -3859,24 +3870,24 @@ sub getClosestRightDivider
 			  keys(%{$divs->{$partner->[1]}})];
 	if(scalar(@$existing_divs) > 1)
 	  {
-	    debug("Multiple dividers found in partner between segment ",
-		  "self-boundaries: ",
-		  "[$closest_partner->[0]:$seqid:$coord] and ",
-		  "[$closest_partner->[0]:$seqid:$closest] that are deemed ",
-		  "'closest': [",
-		  join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
-		       @$existing_divs),"].");
-	    return($existing_divs->[0]);
+	    warning("Multiple dividers found in partner between segment ",
+		    "self-boundaries: ",
+		    "[$closest_partner->[0]:$seqid:$coord] and ",
+		    "[$closest_partner->[0]:$seqid:$closest] that are deemed ",
+		    "'closest': [",
+		    join(' ',map {"$divs->{$seqid}->{$_}->{PAIR_ID}:$seqid:$_"}
+			 @$existing_divs),"].");
+	    return($existing_divs->[0],$closest);
 	  }
 	elsif(scalar(@$existing_divs) == 1)
-	  {return($existing_divs->[0])}
+	  {return($existing_divs->[0],$closest)}
       }
 
     #If the closest "segment" is the end of the sequence (plus 1), no need to
     #find the midpoint, because it's not a real segment - rather it's just the
     #end boundary
     if($closest == ($seqlen + 1))
-      {return($closest)}
+      {return($closest,$closest)}
 
     #We now have the closest occupied coordinate to the right of $coord.  We
     #need to split the difference and then return the closest frame 1 codon
@@ -3897,7 +3908,7 @@ sub getClosestRightDivider
     my $frame_pos = ($midpoint - 1) % 3 + 1;
 
     if($frame_pos == 1)
-      {return($midpoint)}
+      {return($midpoint,$closest)}
     elsif($frame_pos == 2)
       {
 	if(($midpoint + 2) > $closest)
@@ -3908,13 +3919,13 @@ sub getClosestRightDivider
 		error("Bad frame boundary.  Frame 2.  Midpoint: ",
 		      "[$midpoint].  Closest: [$closest].  Coord(/final ",
 		      "start): [$coord].");
-		return($coord + 1);
+		return($coord + 1,$closest);
 	      }
 
-	    return($midpoint - 1);
+	    return($midpoint - 1,$closest);
 	  }
 
-	return($midpoint + 2);
+	return($midpoint + 2,$closest);
 
 	#Reversed this so that finding the right divider between 2 different coords yields the same result as finding the left divider between the same coords
 #	if(($midpoint - 1) <= $coord)
@@ -3925,13 +3936,13 @@ sub getClosestRightDivider
 #		error("Bad frame boundary.  Frame 2.  Midpoint: ",
 #		      "[$midpoint].  Closest: [$closest].  Coord(/final ",
 #		      "start): [$coord].");
-#		return($coord + 1);
+#		return($coord + 1,$closest);
 #	      }
 #
-#	    return($midpoint + 2);
+#	    return($midpoint + 2,$closest);
 #	  }
 #
-#	return($midpoint - 1);
+#	return($midpoint - 1,$closest);
       }
     elsif($frame_pos == 3)
       {
@@ -3940,15 +3951,15 @@ sub getClosestRightDivider
 	    error("Bad frame boundary for right divider.  Frame 3.  ",
 		  "Midpoint: [$midpoint].  Closest: [$closest].  Coord(",
 		  "/final start): [$coord].");
-	    return($coord + 1);
+	    return($coord + 1,$closest);
 	  }
 
-	return($midpoint + 1);
+	return($midpoint + 1,$closest);
       }
     else
       {error("Unexpected frame result.")}
 
-    return($coord + 1);
+    return($coord + 1,$closest);
   }
 
 #Searches the segments of a solution for the closest left-most coordinate that
@@ -4019,6 +4030,8 @@ sub copyDivider
     my $side     = $_[6]; #left side = we know the source or whether to recode
     my $soln     = $_[7]; #So see if a divider is copying into an identity
                           #segment, so the pairID & source type can be updated
+    my $lesser_bound  = $_[8]; #Don't copy if a divider in this range exists
+    my $greater_bound = $_[9];
 
     my $uniq_seq_partners = {};
     foreach my $partner_seqid (grep {$_ ne $seqid} map {$_->[1]} @$partners)
@@ -4028,6 +4041,23 @@ sub copyDivider
       {
 	my $partner_pair_id = $partner->[0];
 	my $partner_seqid   = $partner->[1];
+
+	#A divider can be in the middle of a gap and it doesn't convert
+	#correctly, thus we need to check between the bounds to see if a
+	#divider already exists here.  The coordinates of the bounds are
+	#guaranteed/assumed to be the closest segments possible.  If a divider
+	#exists in the bounds, it is assumed that when it's converted to the
+	#query sequence, it's the same coordinate.  It's the copying here that
+	#is assumed to be inaccurate.
+	if(dividerExists($seqid,
+			 $lesser_bound,
+			 $greater_bound,
+			 $partner_seqid,
+			 $partner_pair_id,
+			 $div_map,
+			 $data))
+	  {next}
+
 	my $partner_divider = convertDivider($seqid,
 					     $divider,
 					     $partner_pair_id,
@@ -4204,6 +4234,59 @@ sub copyDivider
 	      }
 	  }
       }
+  }
+
+#Checks the bounds of a given sequence against the partner sequence's converted
+#coordinates to see if a divider already exists there.  Bounds are assumed to be the closest.  Only 1 or 0 dividers should exist, otherwise, warn.
+sub dividerExists
+  {
+    my $seqid         = $_[0];
+    my $lesser_bound  = $_[1];
+    my $greater_bound = $_[2];
+    my $partner_seqid = $_[3];
+    my $pair_id       = $_[4];
+    my $div_map       = $_[5];
+    my $data          = $_[6];
+
+    if(calcFrame($lesser_bound) == 3)
+      {$lesser_bound++}
+    elsif(calcFrame($lesser_bound) == 2)
+      {error("Bounds must be in either frame 1 or 3.")}
+
+    if(calcFrame($greater_bound) == 3)
+      {$greater_bound++}
+    elsif(calcFrame($greater_bound) == 2)
+      {error("Bounds must be in either frame 1 or 3.")}
+
+    my $partner_lesser = convertDivider($seqid,
+					$lesser_bound,
+					$pair_id,
+					$partner_seqid,
+					$data);
+
+    my $partner_greater = convertDivider($seqid,
+					 $greater_bound,
+					 $pair_id,
+					 $partner_seqid,
+					 $data);
+
+    my $existing_divs = [sort {$a <=> $b}
+			 grep {$_ >= $partner_lesser && $_ <= $partner_greater}
+			 keys(%{$div_map->{$partner_seqid}})];
+
+    if(scalar(@$existing_divs) > 1)
+      {
+	warning("Multiple dividers found between segment boundaries: ",
+		"[$partner_seqid:$partner_lesser] and ",
+		"[$partner_seqid:$partner_greater] that are deemed ",
+		"'closest': [",join(' ',map {"$partner_seqid:$_"}
+				    @$existing_divs),"].");
+	return(2);
+      }
+    elsif(scalar(@$existing_divs) == 1)
+      {return(1)}
+
+    return(0);
   }
 
 #Takes a sequence ID, a coordinate, a pair ID, and the sequence ID of the
