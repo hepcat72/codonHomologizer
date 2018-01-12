@@ -3556,7 +3556,7 @@ sub getClosestLeftDivider
 
     #First check myself...
     my $self_divider =
-      dividerExists($seqid,$closest,$coord,undef,undef,$divs,undef);
+      dividerExists($seqid,$closest,$coord,undef,undef,$divs,undef,1);
     if($self_divider)
       {return($self_divider,$closest)}
 
@@ -3570,7 +3570,8 @@ sub getClosestLeftDivider
 					    $partner->[1],
 					    $partner->[0],
 					    $divs,
-					    $data);
+					    $data,
+					    1);
 	if($partner_divider)
 	  {return($partner_divider,$closest)}
       }
@@ -3786,7 +3787,7 @@ debug("The conversion back is ",(calcFrame($orig_rght_seg_coord) == 1 ? '' : 'NO
 
     #First check myself...
     my $self_divider =
-      dividerExists($seqid,$closest,$coord,undef,undef,$divs,undef);
+      dividerExists($seqid,$coord,$closest,undef,undef,$divs,undef,0);
     if($self_divider)
       {return($self_divider,$closest)}
 
@@ -3795,12 +3796,13 @@ debug("The conversion back is ",(calcFrame($orig_rght_seg_coord) == 1 ? '' : 'NO
       {
 	#This should be converted back
 	my $partner_divider = dividerExists($seqid,
-					    $closest,
 					    $coord,
+					    $closest,
 					    $partner->[1],
 					    $partner->[0],
 					    $divs,
-					    $data);
+					    $data,
+					    0);
 	if($partner_divider)
 	  {return($partner_divider,$closest)}
       }
@@ -4169,6 +4171,10 @@ sub dividerExists
     my $pair_id       = $_[4];
     my $div_map       = $_[5];
     my $data          = $_[6];
+    my $looking_left  = $_[7]; #When choosing among multiple source dividers,
+                               #choose the one closest to where you're looking
+                               #from (if you're looking left, choose the right-
+                               #most one.
 
     if(calcFrame($lesser_bound) == 3)
       {$lesser_bound++}
@@ -4183,7 +4189,7 @@ sub dividerExists
     #If we're not checking a partner
     if(!defined($partner_seqid))
       {
-	my $existing_divs = [sort {$a <=> $b}
+	my $existing_divs = [sort {$looking_left ? $b <=> $a : $a <=> $b}
 			     grep {$_ >= $lesser_bound && $_ <= $greater_bound}
 			     keys(%{$div_map->{$seqid}})];
 
