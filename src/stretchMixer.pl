@@ -3096,7 +3096,7 @@ sub setMapDividers
     my $soln      = $_[0];
     my $data      = $_[1];
     my $part_hash = $_[2];
-    my $div_map   = {};
+    my $div_map   = setStaticMapDividers($soln);
 
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
@@ -3362,6 +3362,46 @@ sub setMapDividers
 
 	    $lastind = $recind;
 	    $cnt++;
+	  }
+      }
+
+    return($div_map);
+  }
+
+#This method pre-populates the map with those dividers that do not need a
+#midpoint calculation because they are contiguous neighbors with a segment
+#piece to the left
+sub setStaticMapDividers
+  {
+    my $soln      = $_[0];
+    my $div_map   = {};
+
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
+      {
+	my @ordered_indexes = sort {$soln->{$seqid}->[$a]->{FINAL_START} <=>
+				      $soln->{$seqid}->[$b]->{FINAL_START}}
+	  0..$#{$soln->{$seqid}};
+
+	my $stop_hash = {};
+
+	#For each segment record index (in order of ascending FINAL_START)
+	foreach my $pseudoind (0..$#ordered_indexes)
+	  {
+	    my $recind  = $ordered_indexes[$pseudoind];
+	    my $rec     = $soln->{$seqid}->[$recind];
+
+	    if(exists($stop_hash->{$rec->{FINAL_START} - 1}))
+	      {
+		$div_map->{$seqid}->{$rec->{FINAL_START}} =
+		  {PAIR_ID    => $rec->{PAIR_ID},
+		   TYPE       => 'SOURCE',
+		   STOP       => undef,
+		   IDEN_START => $rec->{IDEN_START}, #Might be outside the
+		   IDEN_STOP  => $rec->{IDEN_STOP},  #coords, but that's OK
+		   SEQ        => ''};
+	      }
+
+	    $stop_hash->{$rec->{FINAL_STOP}} = 0;
 	  }
       }
 
@@ -3979,7 +4019,8 @@ sub copyDivider
 			 $partner_seqid,
 			 $partner_pair_id,
 			 $div_map,
-			 $data))
+			 $data,
+			 0))
 	  {next}
 
 	my $partner_divider = convertDivider($seqid,
@@ -4193,7 +4234,12 @@ sub dividerExists
 			     grep {$_ >= $lesser_bound && $_ <= $greater_bound}
 			     keys(%{$div_map->{$seqid}})];
 
-	if(scalar(@$existing_divs) > 1)
+	#If multiple dividers were found and at least 1 is nonsource, issue a
+	#warning.
+	if(scalar(@$existing_divs) > 1 &&
+	   scalar(grep {!defined($div_map->{$seqid}->{$_}->{TYPE}) ||
+			  $div_map->{$seqid}->{$_}->{TYPE} ne 'SOURCE'}
+		  @$existing_divs))
 	  {
 	    warning("Multiple dividers found between segment boundaries: ",
 		    "[$seqid:$lesser_bound] and ",
@@ -4202,7 +4248,7 @@ sub dividerExists
 					@$existing_divs),"].");
 	    return($existing_divs->[0]);
 	  }
-	elsif(scalar(@$existing_divs) == 1)
+	elsif(scalar(@$existing_divs))
 	  {return($existing_divs->[0])}
 
 	return(0);
@@ -4238,7 +4284,7 @@ sub dividerExists
 					 $partner_seqid,
 					 $data);
 
-    my $existing_divs = [sort {$a <=> $b}
+    my $existing_divs = [sort {$looking_left ? $b <=> $a : $a <=> $b}
 			 grep {$_ >= $partner_lesser && $_ <= $partner_greater}
 			 keys(%{$div_map->{$partner_seqid}})];
 
@@ -4251,7 +4297,10 @@ sub dividerExists
 
     debug({LEVEL => 5},"[",scalar(@$existing_divs),"] dividers already exist between $seqid:$lesser_bound and $seqid:$greater_bound in $partner_seqid:$partner_lesser and $partner_seqid:$partner_greater according to alignment $pair_id");
 
-    if(scalar(@$existing_divs) > 1)
+    if(scalar(@$existing_divs) > 1 &&
+       scalar(grep {!defined($div_map->{$partner_seqid}->{$_}->{TYPE}) ||
+		      $div_map->{$partner_seqid}->{$_}->{TYPE} ne 'SOURCE'}
+	      @$existing_divs))
       {
 	warning("Multiple dividers found between segment boundaries: ",
 		"[$partner_seqid:$partner_lesser] and ",
@@ -4263,7 +4312,7 @@ sub dividerExists
 		join(' ',map {"$partner_seqid:$_"} @$existing_orig_divs),"].");
 	return($existing_orig_divs->[0]);
       }
-    elsif(scalar(@$existing_divs) == 1)
+    elsif(scalar(@$existing_divs))
       {return($existing_orig_divs->[0])}
 
     return(0);
