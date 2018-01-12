@@ -4306,7 +4306,7 @@ sub dividerExists
 		"[$partner_seqid:$partner_lesser] and ",
 		"[$partner_seqid:$partner_greater] (converted from ",
 		"[$seqid:$lesser_bound] and [$seqid:$greater_bound]) that ",
-		"are deemed 'closest': [",join(' ',map {"$partner_seqid:$_"}
+		"are deemed 'closest': [",join(' ',map {"$partner_seqid:$_(" . (defined($div_map->{$partner_seqid}->{$_}->{TYPE}) ? $div_map->{$partner_seqid}->{$_}->{TYPE} : 'undef') . ")"}
 					       @$existing_divs),
 		"] which were converted to: [",
 		join(' ',map {"$partner_seqid:$_"} @$existing_orig_divs),"].");
