@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.007';
+our $VERSION = '1.008';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -932,7 +932,7 @@ sub addToSolution
 		   $pairid,
 
 		   $seqid1,
-		   $first_codon_start1,
+		   $iden_start1,
 		   $first_codon_start1 + 2,
 		   $first_codon_start1,
 		   $first_codon_start1 + 2,
@@ -953,7 +953,7 @@ sub addToSolution
 
 		   $seqid1,
 		   $last_codon_stop1 - 2,
-		   $last_codon_stop1,
+		   $iden_stop1,
 		   $last_codon_stop1 - 2,
 		   $last_codon_stop1,
 
@@ -972,7 +972,7 @@ sub addToSolution
 		   $pairid,
 
 		   $seqid2,
-		   $first_codon_start2,
+		   $iden_start2,
 		   $first_codon_start2 + 2,
 		   $first_codon_start2,
 		   $first_codon_start2 + 2,
@@ -993,7 +993,7 @@ sub addToSolution
 
 		   $seqid2,
 		   $last_codon_stop2 - 2,
-		   $last_codon_stop2,
+		   $iden_stop2,
 		   $last_codon_stop2 - 2,
 		   $last_codon_stop2,
 
@@ -3241,21 +3241,19 @@ if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}
 		   IDEN_START => $rec->{IDEN_START}, #Might be outside the
 		   IDEN_STOP  => $rec->{IDEN_STOP},  #coords, but that's OK
 		   SEQ        => ''};
-
-		###HAVING THE COPY HERE MIGHT BE A MISTAKE - PROBABLY IS.  IF THE DIVIDER WAS COPIED HERE WHEN PROCESSING A DIFFERENT SEQUENCE, IT STILL HAS TO COPY TO THIS SEQUENCE'S PARTNERS, WHICH WILL BE DIFFERENT FROM THIS SEQUENCE'S PARTNER'S PARTNERS - I WILL CHECK THIS BY ADDING A VALIDATION STEP TO MAKE SURE THE IDENTITY SEGMENTS ARE PRESENT IN THE FINAL SEQUENCE
-
-		#Copy this divider to the partner sequences
-		copyDivider($divider_left,
-			    $seqid,
-			    $div_map,
-			    $partners,
-			    $data,
-			    $rec->{PAIR_ID},
-			    'left',
-			    $soln,
-			    $closest_left,
-			    $rec->{FINAL_START});
 	      }
+
+	    #Copy this divider to the partner sequences
+	    copyDivider($divider_left,
+			$seqid,
+			$div_map,
+			$partners,
+			$data,
+			$rec->{PAIR_ID},
+			'left',
+			$soln,
+			$closest_left,
+			$rec->{FINAL_START});
 
 	    #Check to make sure that the very beginning of the sequence is
 	    #accounted for, because a divider could have been copied over and
@@ -3397,21 +3395,19 @@ if(!(exists($div_map->{$seqid}) &&
 		   STOP       => undef,  #so allow it to be over-written with
 		   SEQ        => ''};    #another pair's copy by setting =undef
 }
-
-		###HAVING THE COPY HERE MIGHT BE A MISTAKE - PROBABLY IS.  IF THE DIVIDER WAS COPIED HERE WHEN PROCESSING A DIFFERENT SEQUENCE, IT STILL HAS TO COPY TO THIS SEQUENCE'S PARTNERS, WHICH WILL BE DIFFERENT FROM THIS SEQUENCE'S PARTNER'S PARTNERS - I WILL CHECK THIS BY ADDING A VALIDATION STEP TO MAKE SURE THE IDENTITY SEGMENTS ARE PRESENT IN THE FINAL SEQUENCE
-
-                #Copy this divider to the partner sequences
-	        copyDivider($divider_right,
-			    $seqid,
-			    $div_map,
-			    $partners,
-			    $data,
-			    $rec->{PAIR_ID},
-			    'right',
-			    $soln,
-			    $rec->{FINAL_STOP},
-			    $closest_right);
 	      }
+
+            #Copy this divider to the partner sequences
+	    copyDivider($divider_right,
+			$seqid,
+			$div_map,
+			$partners,
+			$data,
+			$rec->{PAIR_ID},
+			'right',
+			$soln,
+			$rec->{FINAL_STOP},
+			$closest_right);
 
 	    #Check to make sure that the very end of the sequence is accounted
 	    #for, because a divider could have been copied over and interrupted
@@ -4933,6 +4929,9 @@ sub weaveSeqs
 	      }
 	  }
 
+	#Check that all the identity segments in the solution were included
+	my $bad_nts = validateSegments($seqid,$soln,$seqhash,$data);
+
 	#Check that the sequences encode the same AA sequence
 	my $any_orig_aa = uc(translate($any_orig_seq,     $codon_hash->{REV}));
 	my $mixed_aa    = uc(translate($seqhash->{$seqid},$codon_hash->{REV}));
@@ -4941,18 +4940,30 @@ sub weaveSeqs
 		 "translation differs from the original alignment ",
 		 "[$any_pair_id].",
 		 {DETAIL => "ORIG: [$any_orig_aa]\nNEW:  [$mixed_aa]"})}
+	if($bad_nts)
+	  {error("The new mixed hybrid version of sequence [$seqid] failed ",
+		 "validation of the inclusion of all the identity segments ",
+		 "and expected alternate codons.  There were [$bad_nts] ",
+		 "nucleotides that were not as expected.")}
 	if(isVerbose())
 	  {
 	    my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
-	    verbose("[$seqid] ",($any_orig_aa eq $mixed_aa ? '' : 'NOT '),
+	    verbose("[$seqid] AA sequence: ",($any_orig_aa eq $mixed_aa ?
+					      '' : 'NOT '),
 		    "Validated",($any_orig_aa eq $mixed_aa ? '^' : ''),
-		    ".  [$n/",length($any_orig_seq),"] nts changed*.");
+		    ".  Identity segment inclusion: ",($bad_nts ? 'NOT ' : ''),
+		    "Validated",($bad_nts ? " ([$bad_nts] nts in identity " .
+				 "segments not as expected.)" : '#'),
+		    "  [$n/",length($any_orig_seq),"] nts changed*.");
 	  }
       }
 
     verbose("^ = Confirmed to encode the same amino acid sequence compared ",
 	    "to 1 arbitrarily selected alignment.\n* = As compared to 1 ",
-	    "arbitrarily selected alignment.");
+	    "arbitrarily selected alignment.\n# = All included identity ",
+	    "segments in the solution are confirmed to be present and ",
+	    "correctly encoded from their respective pairwise source ",
+	    "alignments.");
 
     #Now let's make captial letters represent
     foreach my $seqid (sort {$a cmp $b} keys(%$map))
@@ -4982,6 +4993,65 @@ sub weaveSeqs
       }
 
     return($seqhash,$sourceseqs);
+  }
+
+sub validateSegments
+  {
+    my $seqid   = $_[0];
+    my $soln    = $_[1];
+    my $seqhash = $_[2];
+    my $data    = $_[3];
+
+    my $bad_cnt = 0;
+
+    foreach my $solrec (@{$soln->{$seqid}})
+      {
+	my $type = $solrec->{TYPE};
+	my($expected_nts,$idlen,$idstart,$idstop);
+
+	if($type eq 'seg')
+	  {
+	    #Obtain the identity characters that we expect to find in the final
+	    #re-encoded sequence from the source alignment
+	    $idstart       = $solrec->{IDEN_START};
+	    $idstop        = $solrec->{IDEN_STOP};
+	    my $pair_id    = $solrec->{PAIR_ID};
+	    my $source_seq = $data->{$pair_id}->{SEQS}->{$seqid};
+	    $idlen         = $idstop - $idstart + 1;
+	    $expected_nts  = uc(substr($source_seq,$idstart - 1,$idlen));
+	  }
+	elsif($type eq 'alt')
+	  {
+	    #W're going to assume that the alternate codon was selected
+	    #correctly.  There might be identity characters on each side and
+	    #there's no way to know which characters are a part of the identity
+	    #because it wasn't saved.  So just to make things easier yet still
+	    #have a check, we well test to see if the alternate codon is what
+	    #we expect it to be
+	    $idstart      = $solrec->{FINAL_START};
+	    $idstop       = $solrec->{FINAL_STOP};
+	    $idlen        = 3;
+	    $expected_nts = uc($solrec->{ALT_CODON});
+	  }
+
+	if(!defined($idstart) || !defined($idstop) || $idstop < $idstart)
+	  {
+	    debug("Identity start/stop invalid.");
+	    next;
+	  }
+
+	my $actual_nts = uc(substr($seqhash->{$seqid},$idstart - 1,$idlen));
+
+	for(my $pos = 0;$pos < length($actual_nts);$pos++)
+	  {
+	    my $exp_nt = substr($expected_nts,$pos,1);
+	    my $act_nt = substr($actual_nts,$pos,1);
+	    if($exp_nt ne $act_nt)
+	      {$bad_cnt++}
+	  }
+      }
+
+    return($bad_cnt);
   }
 
 sub outputStats
