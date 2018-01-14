@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.008';
+our $VERSION = '1.009';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -4407,7 +4407,17 @@ sub dividerExists
 					 $data);
 
     my $existing_divs = [sort {$looking_left ? $b <=> $a : $a <=> $b}
-			 grep {$_ >= $partner_lesser && $_ <= $partner_greater}
+			 grep {my $c=0;if($_ >= $partner_lesser &&
+					  $_ <= $partner_greater)
+				 {$c=convertDivider($partner_seqid,  #Conv back
+						    $_,
+						    $pair_id,
+						    $seqid,
+						    $data)}
+			       $_ >= $partner_lesser &&
+				 $_ <= $partner_greater &&
+				   ($c == 0 || ($c >= $lesser_bound &&
+						$c <= $greater_bound))}
 			 keys(%{$div_map->{$partner_seqid}})];
 
     my $existing_orig_divs = [map {convertDivider($partner_seqid,  #Conv back
@@ -4431,7 +4441,7 @@ sub dividerExists
 		"are deemed 'closest': [",join(' ',map {"$partner_seqid:$_(" . (defined($div_map->{$partner_seqid}->{$_}->{TYPE}) ? $div_map->{$partner_seqid}->{$_}->{TYPE} : 'undef') . ")"}
 					       @$existing_divs),
 		"] which were converted to: [",
-		join(' ',map {"$partner_seqid:$_"} @$existing_orig_divs),"].");
+		join(' ',map {"$seqid:$_"} @$existing_orig_divs),"].");
 	return($existing_orig_divs->[0]);
       }
     elsif(scalar(@$existing_divs))
@@ -5047,7 +5057,11 @@ sub validateSegments
 	    my $exp_nt = substr($expected_nts,$pos,1);
 	    my $act_nt = substr($actual_nts,$pos,1);
 	    if($exp_nt ne $act_nt)
-	      {$bad_cnt++}
+	      {
+		debug("Unexpected identity segment sequence at: [$seqid:",
+		      ($idstart+$pos),"].");
+		$bad_cnt++;
+	      }
 	  }
       }
 
