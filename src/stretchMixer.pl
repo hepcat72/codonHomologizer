@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.006';
+our $VERSION = '1.007';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -3096,7 +3096,30 @@ sub setMapDividers
     my $soln      = $_[0];
     my $data      = $_[1];
     my $part_hash = $_[2];
-    my $div_map   = setStaticMapDividers($soln);
+
+    my $div_map = setStaticMapDividers($soln);
+
+    createLeftDividers($soln,$data,$part_hash,$div_map);
+
+    createRightDividers($soln,$data,$part_hash,$div_map);
+
+    return($div_map);
+  }
+
+#This creates 'left' aka 'SOURCE' dividers in the divider map.  It looks to the
+#left of each identity segment to find the closest nearby segment in all of the
+#alignments each sequence is involved in and finds a midpoint in frame 1 to
+#place a divider.  A divider tells the map which alignment a portion of a
+#sequence should be obtained from or whether it should be re-encoded.  Left
+#dividers always come directly from an alignment, which is why they are also
+#known as 'source' dividers.  This is because downstream of the divider is an
+#identity segment from that alignment.
+sub createLeftDividers
+  {
+    my $soln      = $_[0]; #Identity segment solution
+    my $data      = $_[1]; #Original data hash created from the input files
+    my $part_hash = $_[2]; #Partner hash
+    my $div_map   = $_[3]; #Partially finished map where dividers will be saved
 
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
@@ -3116,7 +3139,7 @@ sub setMapDividers
 	      {error("FINAL_STOP NOT DEFINED IN THE FOLLOWING HASH: [",
 		     join(', ',map {"$_ => $rec->{$_}"} keys(%$rec)),"].")}
 
-	    verbose("Determining midpoint boundaries of ",
+	    verbose("Determining left-side midpoint boundaries of ",
 		    "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]");
 
 	    #Obtain all the pair IDs and Sequence IDs of all the sequences that
@@ -3143,15 +3166,50 @@ sub setMapDividers
 	    if(!defined($divider_left))
 	      {$divider_left = 1}
 
+	    my $dividers_exist = dividersExist($seqid,
+					       $closest_left,
+					       $rec->{FINAL_START},
+					       $div_map,
+					       $data,
+					       1);
+
 	    #This divider might have been copied from another sequence, so
 	    #check it for a conflict before recording it
 	    if(exists($div_map->{$seqid}) &&
 	       exists($div_map->{$seqid}->{$divider_left}) &&
 	       defined($div_map->{$seqid}->{$divider_left}->{TYPE}) &&
-	       $div_map->{$seqid}->{$divider_left}->{TYPE} eq 'SOURCE' &&
-	       $div_map->{$seqid}->{$divider_left}->{PAIR_ID} ne
-	       $rec->{PAIR_ID})
+	       $div_map->{$seqid}->{$divider_left}->{TYPE} eq 'SOURCE')
 	      {
+		if($div_map->{$seqid}->{$divider_left}->{PAIR_ID} ne
+		   $rec->{PAIR_ID})
+		  {debug("Sequence [$seqid] has multiple source alignments: [",
+			 $div_map->{$seqid}->{$divider_left}->{PAIR_ID},
+			 "] and [$rec->{PAIR_ID}].  Both alignments are ",
+			 "marked as being the source for a divider starting ",
+			 "left of an identity segment at sequence-relative ",
+			 "position [$seqid:segment:$rec->{FINAL_START} ",
+			 "divider:$divider_left].  Ignoring alignment ",
+			 "[$rec->{PAIR_ID}].  This should be checked ",
+			 "manually to confirm that their identity segments ",
+			 "are encoded the same in both alignments.  Even ",
+			 "though completely overlapping redundant identical ",
+			 "segments were aribtrarily removed from a sequence ",
+			 "that was aligned independently with 2 other ",
+			 "sequences, the segments still exist in the ",
+			 "partners, which will trigger the copying of the ",
+			 "same divider (from different sources) to the ",
+			 "common sequence record - and is OK - as long as ",
+			 "it's confirmed that this is what's happening.  One ",
+			 "possible complication is if the identity in one ",
+			 "pair is larger than in the other pair.  The other ",
+			 "pair's segment would have been eliminated (since ",
+			 "it was completely overlapping) and its partner ",
+			 "would copy a unique divider at its start and 1 ",
+			 "after the stop, changing the source unnecessarily, ",
+			 "but since they MUST be identical anyway, it only ",
+			 "results in making it more complicated than it ",
+			 "needs to be.",{LEVEL => 3})}
+
 		#If this was a copied divider, fill it in
 		if($div_map->{$seqid}->{$divider_left}->{IDEN_START} == 0)
 		  {
@@ -3162,31 +3220,6 @@ sub setMapDividers
 		    $div_map->{$seqid}->{$divider_left}->{IDEN_STOP} =
 		      $rec->{IDEN_STOP};
 		  }
-		debug("Sequence [$seqid] has multiple source alignments: [",
-		      $div_map->{$seqid}->{$divider_left}->{PAIR_ID},
-		      "] and [$rec->{PAIR_ID}].  Both alignments are marked ",
-		      "as being the source for a divider starting left of an ",
-		      "identity segment at sequence-relative position ",
-		      "[$seqid:segment:$rec->{FINAL_START} divider:",
-		      "$divider_left].  Ignoring alignment [$rec->{PAIR_ID}",
-		      "].  This should be checked manually to confirm that ",
-		      "their identity segments are encoded the same in both ",
-		      "alignments.  Even though completely overlapping ",
-		      "redundant identical segments were aribtrarily removed ",
-		      "from a sequence that was aligned independently with 2 ",
-		      "other sequences, the segments still exist in the ",
-		      "partners, which will trigger the copying of the same ",
-		      "divider (from different sources) to the common ",
-		      "sequence record - and is OK - as long as it's ",
-		      "confirmed that this is what's happening.  One ",
-		      "possible complication is if the identity in one pair ",
-		      "is larger than in the other pair.  The other pair's ",
-		      "segment would have been eliminated (since it was ",
-		      "completely overlapping) and its partner would copy a ",
-		      "unique divider at its start and 1 after the stop, ",
-		      "changing the source unnecessarily, but since they ",
-		      "MUST be identical anyway, it only results in making ",
-		      "it more complicated than it needs to be.",{LEVEL => 3});
 	      }
 	    else
 	      {
@@ -3198,6 +3231,9 @@ sub setMapDividers
 		      "for $seqid from $rec->{PAIR_ID} with identity coords ",
 		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
 
+if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}->{$divider_left})))
+  {warning("SANITY CHECK 1: OVERWRITING EXISTING DIVIDER: [$dividers_exist].")}
+
 		$div_map->{$seqid}->{$divider_left} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => 'SOURCE',
@@ -3205,19 +3241,21 @@ sub setMapDividers
 		   IDEN_START => $rec->{IDEN_START}, #Might be outside the
 		   IDEN_STOP  => $rec->{IDEN_STOP},  #coords, but that's OK
 		   SEQ        => ''};
-	      }
 
-	    #Copy this divider to the partner sequences
-	    copyDivider($divider_left,
-			$seqid,
-			$div_map,
-			$partners,
-			$data,
-			$rec->{PAIR_ID},
-		        'left',
-		        $soln,
-			$closest_left,
-			$rec->{FINAL_START});
+		###HAVING THE COPY HERE MIGHT BE A MISTAKE - PROBABLY IS.  IF THE DIVIDER WAS COPIED HERE WHEN PROCESSING A DIFFERENT SEQUENCE, IT STILL HAS TO COPY TO THIS SEQUENCE'S PARTNERS, WHICH WILL BE DIFFERENT FROM THIS SEQUENCE'S PARTNER'S PARTNERS - I WILL CHECK THIS BY ADDING A VALIDATION STEP TO MAKE SURE THE IDENTITY SEGMENTS ARE PRESENT IN THE FINAL SEQUENCE
+
+		#Copy this divider to the partner sequences
+		copyDivider($divider_left,
+			    $seqid,
+			    $div_map,
+			    $partners,
+			    $data,
+			    $rec->{PAIR_ID},
+			    'left',
+			    $soln,
+			    $closest_left,
+			    $rec->{FINAL_START});
+	      }
 
 	    #Check to make sure that the very beginning of the sequence is
 	    #accounted for, because a divider could have been copied over and
@@ -3243,6 +3281,57 @@ sub setMapDividers
 		#holder that could get copied over.
 	      }
 
+	    $lastind = $recind;
+	    $cnt++;
+	  }
+      }
+
+    return(0);
+  }
+
+#This creates 'right' aka 'RECODE' (or simply undefined) dividers in the
+#divider map.  It looks to the right of each identity segment to find the
+#closest nearby segment in all of the alignments each sequence is involved in
+#(which doesn't already have a divider) and finds a midpoint in frame 1 to
+#place a divider.  A divider tells the map which alignment a portion of a
+#sequence should be obtained from or whether it should be re-encoded.  Right
+#dividers (unless a left divider is already there), is always recoded.  This is
+#because there may be another divider downstream and no identity segment in
+#between because the closest identity segment comes from an unrelated
+#alignment, e.g. the closest identity segment to A's segment with B is a
+#segment B has with C.
+sub createRightDividers
+  {
+    my $soln      = $_[0];
+    my $data      = $_[1];
+    my $part_hash = $_[2];
+    my $div_map   = $_[3];
+
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
+      {
+	my $lastind = -1;
+	my $cnt     = 0;
+	my @ordered_indexes = sort {$soln->{$seqid}->[$a]->{FINAL_START} <=>
+				      $soln->{$seqid}->[$b]->{FINAL_START}}
+	  0..$#{$soln->{$seqid}};
+
+	#For each segment record index (in order of ascending FINAL_START)
+	foreach my $pseudoind (0..$#ordered_indexes)
+	  {
+	    my $recind  = $ordered_indexes[$pseudoind];
+	    my $rec     = $soln->{$seqid}->[$recind];
+
+	    if(!defined($rec->{FINAL_STOP}))
+	      {error("FINAL_STOP NOT DEFINED IN THE FOLLOWING HASH: [",
+		     join(', ',map {"$_ => $rec->{$_}"} keys(%$rec)),"].")}
+
+	    verbose("Determining right-side midpoint boundaries of ",
+		    "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]");
+
+	    #Obtain all the pair IDs and Sequence IDs of all the sequences that
+	    #$seqid has been aligned with
+	    my $partners = $part_hash->{$seqid};
+
 	    #Using the partner coordinates relative to this FINAL_STOP,
 	    #look for a any segment to the right among the partner
 	    #sequences this sequence has been paired with.  If any exists,
@@ -3259,6 +3348,13 @@ sub setMapDividers
 				     $partners,
 				     $div_map);
 
+	    my $dividers_exist = dividersExist($seqid,
+					       $rec->{FINAL_STOP},
+					       $closest_right,
+					       $div_map,
+					       $data,
+					       0);
+
 	    #If the returned divider is indefined and we're at the end of the
 	    #ordered segments, set the default as just after the end of the
 	    #sequence just in case
@@ -3273,44 +3369,26 @@ sub setMapDividers
 	      }
 	    #This divider might have been copied from another sequence, so
 	    #check it for a conflict before recording it
-	    if(exists($div_map->{$seqid}) &&
-	       exists($div_map->{$seqid}->{$divider_right}) &&
-	       defined($div_map->{$seqid}->{$divider_right}->{TYPE}) &&
-	       $div_map->{$seqid}->{$divider_right}->{TYPE} eq 'SOURCE' &&
-	       $div_map->{$seqid}->{$divider_right}->{PAIR_ID} ne
-	       $rec->{PAIR_ID})
-	      {debug("Sequence [$seqid] has multiple source alignments [",
-		     $div_map->{$seqid}->{$divider_right}->{PAIR_ID},
-		     "] and [$rec->{PAIR_ID}].  Both alignments are marked ",
-		     "as being the source for a divider starting right of an ",
-		     "identity segment at sequence-relative position [$seqid:",
-		     "segment:$rec->{FINAL_STOP} divider:$divider_right].  ",
-		     "Ignoring alignment [$rec->{PAIR_ID}].  This should be ",
-		     "checked manually to confirm that their identity ",
-		     "segments are encoded the same in both alignments.  ",
-		     "Even though completely overlapping redundant identical ",
-		     "segments were aribtrarily removed from a sequence that ",
-		     "was aligned independently with 2 other sequences, the ",
-		     "segments still exist in the partners, which will ",
-		     "trigger the copying of the same divider (from ",
-		     "different sources) to the common sequence record - and ",
-		     "is OK - as long as it's confirmed that this is what's ",
-		     "happening.  One possible complication is if the ",
-		     "identity in one pair is larger than in the other ",
-		     "pair.  The other pair's segment would have been ",
-		     "eliminated (since it was completely overlapping) and ",
-		     "its partner would copy a unique divider at its start ",
-		     "and 1 after the stop, changing the source ",
-		     "unnecessarily, but since they MUST be identical ",
-		     "anyway, it only results in making it more complicated ",
-		     "than it needs to be.",{LEVEL => 3})}
-	    else
+	    if(!exists($div_map->{$seqid}) ||
+	       !exists($div_map->{$seqid}->{$divider_right}) ||
+	       !defined($div_map->{$seqid}->{$divider_right}->{TYPE}) ||
+	       $div_map->{$seqid}->{$divider_right}->{TYPE} ne 'SOURCE')
 	      {
-		debug({LEVEL => 4},"Creating right divider $divider_right ",
+		debug({LEVEL => 4},
+		      (exists($div_map->{$seqid}) &&
+		       exists($div_map->{$seqid}->{$divider_right}) ?
+		       'Overwriting' : "Creating"),
+		      " right divider $divider_right ",
 		      "right of segment at $rec->{FINAL_STOP} for $seqid ",
 		      "from $rec->{PAIR_ID} with identity coords ",
 		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
 
+if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}->{$divider_right})))
+  {warning("SANITY CHECK 2: OVERWRITING EXISTING DIVIDER: [$dividers_exist].")}
+
+if(!(exists($div_map->{$seqid}) &&
+     exists($div_map->{$seqid}->{$divider_right})))
+{
 		$div_map->{$seqid}->{$divider_right} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   IDEN_START => 0,
@@ -3318,19 +3396,22 @@ sub setMapDividers
 		   TYPE       => undef,  #Don't know seg this belongs to yet,
 		   STOP       => undef,  #so allow it to be over-written with
 		   SEQ        => ''};    #another pair's copy by setting =undef
-	      }
+}
 
-	    #Copy this divider to the partner sequences
-	    copyDivider($divider_right,
-			$seqid,
-			$div_map,
-			$partners,
-			$data,
-			$rec->{PAIR_ID},
-		        'right',
-			$soln,
-		        $rec->{FINAL_STOP},
-		        $closest_right);
+		###HAVING THE COPY HERE MIGHT BE A MISTAKE - PROBABLY IS.  IF THE DIVIDER WAS COPIED HERE WHEN PROCESSING A DIFFERENT SEQUENCE, IT STILL HAS TO COPY TO THIS SEQUENCE'S PARTNERS, WHICH WILL BE DIFFERENT FROM THIS SEQUENCE'S PARTNER'S PARTNERS - I WILL CHECK THIS BY ADDING A VALIDATION STEP TO MAKE SURE THE IDENTITY SEGMENTS ARE PRESENT IN THE FINAL SEQUENCE
+
+                #Copy this divider to the partner sequences
+	        copyDivider($divider_right,
+			    $seqid,
+			    $div_map,
+			    $partners,
+			    $data,
+			    $rec->{PAIR_ID},
+			    'right',
+			    $soln,
+			    $rec->{FINAL_STOP},
+			    $closest_right);
+	      }
 
 	    #Check to make sure that the very end of the sequence is accounted
 	    #for, because a divider could have been copied over and interrupted
@@ -3365,7 +3446,7 @@ sub setMapDividers
 	  }
       }
 
-    return($div_map);
+    return(0);
   }
 
 #This method pre-populates the map with those dividers that do not need a
@@ -4201,6 +4282,51 @@ sub copyDivider
       }
   }
 
+sub dividersExist
+  {
+    my $seqid         = $_[0];
+    my $lesser_bound  = $_[1];
+    my $greater_bound = $_[2];
+    my $div_map       = $_[3];
+    my $data          = $_[4];
+    my $looking_left  = $_[5]; #When choosing among multiple source dividers,
+                               #choose the one closest to where you're looking
+                               #from (if you're looking left, choose the right-
+                               #most one.
+    my $partners      = $_[6];
+
+    #First check myself...
+    my $self_divider =
+      dividerExists($seqid,
+		    $lesser_bound,
+		    $greater_bound,
+		    undef,
+		    undef,
+		    $div_map,
+		    undef,
+		    $looking_left);
+    if($self_divider)
+      {return($self_divider)}
+
+    #Now check my partners
+    foreach my $partner (@$partners)
+      {
+	#This should be converted back
+	my $partner_divider = dividerExists($seqid,
+					    $lesser_bound,
+					    $greater_bound,
+					    $partner->[1],
+					    $partner->[0],
+					    $div_map,
+					    $data,
+					    $looking_left);
+	if($partner_divider)
+	  {return($partner_divider)}
+      }
+
+    return(0);
+  }
+
 #Checks the bounds of a given sequence against the partner sequence's converted
 #coordinates to see if a divider already exists there.  Bounds are assumed to be the closest.  Only 1 or 0 dividers should exist, otherwise, warn.  It returns the divider coordinate OR (from the original sequence) or 0 (which is not a valid divider coordinate) so it can be used as a boolean.
 sub dividerExists
@@ -4767,8 +4893,8 @@ sub weaveSeqs
       {print STDERR "\n"}
 
     #Edit the sequences to add the alternate codons (and while we're at it,
-    #we'll error-check that the sequences were created, the correct length, and
-    #encode the same AA sequence)
+    #we'll error-check that the sequences were created, the correct length,
+    #encode the same AA sequence, and contain the included identity segments)
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
 	#The length of each version of a sequence should be the same in any
