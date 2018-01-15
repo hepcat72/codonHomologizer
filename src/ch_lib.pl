@@ -188,7 +188,7 @@ sub createMatrixCrossover1
 	  }
       }
 
-    verbose({LEVEL => 2},matrixToString($matrix));
+    verbose({LEVEL => 3},matrixToString($matrix));
 
     return($matrix);
   }
@@ -668,7 +668,7 @@ sub getNextSeqRec
 	  {
 	    $num_fastq_defs =
 	      `head -n 50 "$input_file" | grep -c -E '^[\@\+]'`;
-	    debug({LEVEL => 2},"System output from: [",
+	    debug({LEVEL => 3},"System output from: [",
 		  qq(head -n 50 "$input_file" | grep -c -E '^[\@\+]'),
 		  "]:\n$num_fastq_defs");
 	    $num_fastq_defs =~ s/^\D+//;
@@ -689,7 +689,7 @@ sub getNextSeqRec
 	      {
 		$num_fasta_defs = `head -n 50 "$input_file" | grep -c -E '^>'`;
 
-		debug({LEVEL => 2},"System output from: [",
+		debug({LEVEL => 3},"System output from: [",
 		      qq(head -n 50 "$input_file" | grep -c -E '^>'),
 		      "]:\n$num_fasta_defs");
 
