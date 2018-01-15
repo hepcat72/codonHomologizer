@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.009';
+our $VERSION = '1.010';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -286,10 +286,12 @@ while(nextFileCombo())
   }
 
 my $max_size = (sort {$b <=> $a} @$stretch_mins)[0];
+my($divider_warnings);
 
 foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
   {
     my $solution = {};
+    $divider_warnings = {};
     #Add segments to the solution starting with the largest segments and going
     #down in size (to squeeze less optimally sized segments in)
     foreach my $size (sort {$b <=> $a} @$stretch_mins)
@@ -318,15 +320,19 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
     debug("Raw unreduced solution with unmerged overlapping identity segments",
 	  ":\n",solutionToString($solution),"\n");
 
-    outputHybrids(generateHybrids($solution,
-				  $input_data_hash->{$outfile}->{DATA},
-				  $input_data_hash->{$outfile}->{CDNHASH},
-				  $input_data_hash->{$outfile}->{MTXHASH}),
-		   $outfile);
+    my $soln_stats =
+      outputHybrids(generateHybrids($solution,
+				    $input_data_hash->{$outfile}->{DATA},
+				    $input_data_hash->{$outfile}->{CDNHASH},
+				    $input_data_hash->{$outfile}->{MTXHASH},
+				    $stretch_mins),
+		    $outfile);
 
     outputStats($solution,
 		$input_data_hash->{$outfile}->{DATA},
-	        $max_size);
+	        $max_size,
+	        $soln_stats,
+	        $stretch_mins);
   }
 
 
@@ -1941,7 +1947,7 @@ sub scoreSolution
 
 	    #For each segment of size $max_size included in the solution (not
 	    #including alt. codons)
-	    if(($subseqrec->{IDEN_STOP} - $subseqrec->{IDEN_START} + 1) ==
+	    if(($subseqrec->{IDEN_STOP} - $subseqrec->{IDEN_START} + 1) >=
 	       $max_size)
 	      {
 		#For each position of identity in this segment, record the
@@ -1979,6 +1985,8 @@ sub scoreSolution
     #For all possible pairs available
     foreach my $pairid (sort {$a cmp $b} keys(%$hash))
       {
+	my $inclusion_score = 0;
+
 	## Spacing score calculations
 
 	#For all possible sequences
@@ -2029,6 +2037,9 @@ sub scoreSolution
 		$last_pos = $pos;
 	      }
 
+	    debug("Sequence [$seqid] has [$tmp_inclusion_score] identity ",
+		  "segments >= size [$max_size].");
+
 	    #Calculate the last number of unique/independent segments
 	    my $usegs = int($cur_size / $max_size);
 	    if($usegs > 0)
@@ -2048,7 +2059,12 @@ sub scoreSolution
 		$lowest_inclusion_score = $tmp_inclusion_score;
 	      }
 	    $total_inclusion_score += $tmp_inclusion_score;
+	    $inclusion_score += $tmp_inclusion_score;
 	  }
+
+	if(!defined($lowest_inclusion_score) ||
+	   $inclusion_score < $lowest_inclusion_score)
+	  {$lowest_inclusion_score = $inclusion_score}
       }
 
     ## Bases score calculation
@@ -2056,6 +2072,20 @@ sub scoreSolution
     foreach my $pairid (keys(%$occupied))
       {foreach my $seqid (keys(%{$occupied->{$pairid}}))
 	 {$base_score += scalar(keys(%{$occupied->{$pairid}->{$seqid}}))}}
+
+#####THIS IS A TEST TO SEE IF I CAN FIX THE LOWEST INCLUSION SCORE
+my $stats = getSolutionStats($soln,$hash,[$max_size]);
+my $tmin  = scalar(keys(%$soln)) ? undef : 0;
+my $ttot  = 0;
+foreach my $s1 (keys(%$stats))
+  {foreach my $s2 (keys(%{$stats->{$s1}}))
+     {
+       if(defined($stats->{$s1}->{$s2}->{$max_size}))
+	 {$ttot += $stats->{$s1}->{$s2}->{$max_size}}
+       if(!defined($tmin) || defined($stats->{$s1}->{$s2}->{$max_size}) && $stats->{$s1}->{$s2}->{$max_size} != 0 && $stats->{$s1}->{$s2}->{$max_size} < $tmin)
+	{$tmin = $stats->{$s1}->{$s2}->{$max_size}}}}
+$lowest_inclusion_score = $tmin;
+$total_inclusion_score = $ttot / 2;
 
     ## Normalize the spacing score by the number of total regions in all pairs/
     ## sequences
@@ -2095,19 +2125,27 @@ sub generateHybrids
     my $data   = $_[1];
     my $usage  = $_[2];
     my $matrix = $_[3];
+    my $sizes  = $_[4];
 
     verbose("Reducing solution...\n",
 	    "Merging overlapping identity segments from common alignments...");
 
     $soln = reduceSolutionMergeOverlaps($soln);
 
+    verbose({LEVEL => 2},"Solution:\n",solutionToString($soln));
+
+    #This has to be called on the merged overlapping segments version of the
+    #solution, which contains all the duplicate segments from various pairwise
+    #alignments, before the solution is further reduced to address conflicts
+    my $soln_stats = getSolutionStats($soln,$data,$sizes);
+
     verbose("Adjusting overlapping identity segments from different ",
 	    "alignments...");
 
     $soln = reduceSolutionForDirectConflicts($soln);
 
-    verbose("Reduced solution before splitting segments for the recoding map:",
-	    "\n",solutionToString($soln));
+    debug("Reduced solution before splitting segments for the recoding map:",
+	  "\n",solutionToString($soln));
 
     #Get the alignments each sequence is involved in, to be used as a reference
     #when constructing the map of how each sequence should be composed (i.e.
@@ -2135,12 +2173,14 @@ sub generateHybrids
     #was optimized for identity with another sequence)
     my $map = getFilledMap($soln,$data,$partners_hash);
 
+    issueDividerWarnings($map);
+
     verbose("Building solution sequences...");
 
     my($woven_seqs,$source_seqs) =
       weaveSeqs($map,$data,$partners_hash,$matrix,$usage,$soln);
 
-    return([$woven_seqs,$source_seqs]);
+    return([$woven_seqs,$source_seqs,$soln_stats]);
   }
 
 #Merges overlapping segments derived from the same pair by extending a single
@@ -2217,6 +2257,37 @@ sub reduceSolutionMergeOverlaps
       }
 
     return($new_soln);
+  }
+
+sub getSolutionStats
+  {
+    my $soln  = $_[0];
+    my $data  = $_[1];
+    my $sizes = $_[2];
+    my $stats = {};
+
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
+      {
+	foreach my $rec (grep {$_->{TYPE} eq 'seg'} @{$soln->{$seqid}})
+	  {
+	    my $pair_id = $rec->{PAIR_ID};
+	    my($seqid1,$seqid2) = keys(%{$data->{$pair_id}->{SEQS}});
+	    foreach my $i (sort {$sizes->[$a] <=> $sizes->[$b]} 0..$#{$sizes})
+	      {
+		my $min1 = $sizes->[$i];
+		my $min2 = $i == $#{$sizes} ? 0 : $sizes->[$i + 1];
+		my $size = $rec->{IDEN_STOP} - $rec->{IDEN_START} + 1;
+
+		if($size >= $min1 && ($i == $#{$sizes} || $size < $min2))
+		  {
+		    $stats->{$seqid1}->{$seqid2}->{$size}++;
+		    $stats->{$seqid2}->{$seqid1}->{$size}++;
+		  }
+	      }
+	  }
+      }
+
+    return($stats);
   }
 
 #Eliminates overlap between segments of the same sequence, but derived from
@@ -3139,8 +3210,9 @@ sub createLeftDividers
 	      {error("FINAL_STOP NOT DEFINED IN THE FOLLOWING HASH: [",
 		     join(', ',map {"$_ => $rec->{$_}"} keys(%$rec)),"].")}
 
-	    verbose("Determining left-side midpoint boundaries of ",
-		    "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]");
+	    my $msg = "Determining left-side midpoint boundaries of " .
+	      "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]";
+	    isDebug() ? verbose($msg) : verboseOverMe($msg);
 
 	    #Obtain all the pair IDs and Sequence IDs of all the sequences that
 	    #$seqid has been aligned with
@@ -3323,8 +3395,9 @@ sub createRightDividers
 	      {error("FINAL_STOP NOT DEFINED IN THE FOLLOWING HASH: [",
 		     join(', ',map {"$_ => $rec->{$_}"} keys(%$rec)),"].")}
 
-	    verbose("Determining right-side midpoint boundaries of ",
-		    "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]");
+	    my $msg = "Determining right-side midpoint boundaries of " .
+	      "[$seqid:$rec->{FINAL_START}-$rec->{FINAL_STOP}]";
+	    isDebug() ? verbose($msg) : verboseOverMe($msg);
 
 	    #Obtain all the pair IDs and Sequence IDs of all the sequences that
 	    #$seqid has been aligned with
@@ -4363,11 +4436,20 @@ sub dividerExists
 			  $div_map->{$seqid}->{$_}->{TYPE} ne 'SOURCE'}
 		  @$existing_divs))
 	  {
-	    warning("Multiple dividers found between segment boundaries: ",
-		    "[$seqid:$lesser_bound] and ",
-		    "[$seqid:$greater_bound] that are deemed ",
-		    "'closest': [",join(' ',map {"$seqid:$_"}
-					@$existing_divs),"].");
+	    my $divwarnkey = "$seqid:$lesser_bound-$greater_bound";
+	    $divider_warnings->{$divwarnkey}->{MSG} =
+	      join('',("Multiple dividers found between segment boundaries: ",
+		       "[$seqid:$lesser_bound] and ",
+		       "[$seqid:$greater_bound] that are deemed ",
+		       "'closest': [",
+		       join(' ',map {"$seqid:$_(" .
+				       (defined($div_map->{$seqid}->{$_}
+						->{TYPE}) ?
+					$div_map->{$seqid}->{$_}->{TYPE} :
+					'RECODE') . ")"}
+			    @$existing_divs),"]."));
+	    $divider_warnings->{$divwarnkey}->{SEQID}    = $seqid;
+	    $divider_warnings->{$divwarnkey}->{DIVIDERS} = [@$existing_divs];
 	    return($existing_divs->[0]);
 	  }
 	elsif(scalar(@$existing_divs))
@@ -4427,21 +4509,36 @@ sub dividerExists
 						  $data)}
 			      @$existing_divs];
 
-    debug({LEVEL => 5},"[",scalar(@$existing_divs),"] dividers already exist between $seqid:$lesser_bound and $seqid:$greater_bound in $partner_seqid:$partner_lesser and $partner_seqid:$partner_greater according to alignment $pair_id");
+    debug({LEVEL => 5},"[",scalar(@$existing_divs),"] dividers already exist ",
+	  "between $seqid:$lesser_bound and $seqid:$greater_bound in ",
+	  "$partner_seqid:$partner_lesser and $partner_seqid:",
+	  "$partner_greater according to alignment $pair_id");
 
     if(scalar(@$existing_divs) > 1 &&
        scalar(grep {!defined($div_map->{$partner_seqid}->{$_}->{TYPE}) ||
 		      $div_map->{$partner_seqid}->{$_}->{TYPE} ne 'SOURCE'}
 	      @$existing_divs))
       {
-	warning("Multiple dividers found between segment boundaries: ",
-		"[$partner_seqid:$partner_lesser] and ",
-		"[$partner_seqid:$partner_greater] (converted from ",
-		"[$seqid:$lesser_bound] and [$seqid:$greater_bound]) that ",
-		"are deemed 'closest': [",join(' ',map {"$partner_seqid:$_(" . (defined($div_map->{$partner_seqid}->{$_}->{TYPE}) ? $div_map->{$partner_seqid}->{$_}->{TYPE} : 'undef') . ")"}
-					       @$existing_divs),
-		"] which were converted to: [",
-		join(' ',map {"$seqid:$_"} @$existing_orig_divs),"].");
+	    my $divwarnkey = "$partner_seqid:$partner_lesser-$partner_greater";
+	    $divider_warnings->{$divwarnkey}->{MSG} =
+	      join('',("Multiple dividers found between segment boundaries: ",
+		       "[$partner_seqid:$partner_lesser] and ",
+		       "[$partner_seqid:$partner_greater] that are deemed ",
+		       "'closest': [",
+		       join(' ',map {"$partner_seqid:$_(" .
+				       (defined($div_map->{$partner_seqid}
+						->{$_}->{TYPE}) ?
+					$div_map->{$partner_seqid}->{$_}
+					->{TYPE} : 'RECODE') . ")"}
+			    @$existing_divs),"]."));
+	    $divider_warnings->{$divwarnkey}->{DETAIL} =
+	      join('',("Bounds were converted from [$seqid:$lesser_bound] ",
+		       "and [$seqid:$greater_bound] and dividers were ",
+		       "converted back to: [",
+		       join(' ',map {"$seqid:$_"} @$existing_orig_divs),"]."));
+	    $divider_warnings->{$divwarnkey}->{SEQID} = $seqid;
+	    $divider_warnings->{$divwarnkey}->{DIVIDERS} =
+	      [@$existing_orig_divs];
 	return($existing_orig_divs->[0]);
       }
     elsif(scalar(@$existing_divs))
@@ -4726,15 +4823,16 @@ sub weaveSeqs
 			else
 			  {
 			    $unfinished++;
-			    verbose("Sourcing.  Unfinished segments: [",
-				    join(' ',map {"$_:$countdowns->{$_}"}
-					 sort {$a cmp $b}
-					 keys(%$countdowns)),
-				   "] ",
-				    "$seqid:$divider-",
-				    $map->{$seqid}->{$divider}->{STOP},
-				    " TBD.  Should be based on [",
-				    "$map->{$seqid}->{$divider}->{PAIR_ID}].");
+			    verboseOverMe("Sourcing.  Unfinished segments: [",
+					  join(' ',map {"$_:$countdowns->{$_}"}
+					       sort {$a cmp $b}
+					       keys(%$countdowns)),
+					  "] ",
+					  "$seqid:$divider-",
+					  $map->{$seqid}->{$divider}->{STOP},
+					  " TBD.  Should be based on [",
+					  $map->{$seqid}->{$divider}
+					  ->{PAIR_ID},"].");
 			  }
 		      }
 		    else #TYPE is 'SOURCE' - so grab the sequence directly
@@ -5070,12 +5168,17 @@ sub validateSegments
 
 sub outputStats
   {
-    my $soln     = $_[0];
-    my $data     = $_[1];
-    my $max_size = $_[2];
+    my $soln       = $_[0];
+    my $data       = $_[1];
+    my $max_size   = $_[2];
+    my $soln_stats = $_[3];
+    my $sizes      = $_[4];
+
     my $score = scoreSolution($soln,$data,$max_size);
 
     outputSolutionScore($score);
+
+    outputSegmentTable($soln_stats,$sizes);
   }
 
 sub outputSolutionScore
@@ -5091,6 +5194,38 @@ sub outputSolutionScore
 	  "regions.  (A region represents the most even spacing possible ",
 	  "given the number of unique segments.)\n$score->[3]\tTotal number ",
 	  "of unique bases included in an identity segment of any size.\n");
+  }
+
+sub outputSegmentTable
+  {
+    my $stats = $_[0];
+    my $sizes = $_[1];
+
+    my $seqids = [sort {$a cmp $b} keys(%$stats)];
+
+    print("\n");
+
+    foreach my $size (sort {$b <=> $a} @$sizes)
+      {
+	#Print the headers
+	print("Stretch Inclusions for Size $size:\n",
+	      "\t",join("\t",@$seqids),"\n");
+
+	foreach my $rowid (@$seqids)
+	  {
+	    print($rowid);
+	    foreach my $colid (@$seqids)
+	      {
+		if($rowid eq $colid)
+		  {print("\t")}
+		else
+		  {print("\t",(exists($stats->{$rowid}->{$colid}->{$size}) ?
+			       $stats->{$rowid}->{$colid}->{$size} : '0'))}
+	      }
+	    print("\n");
+	  }
+	print("\n");
+      }
   }
 
 sub numDiff
@@ -5214,13 +5349,15 @@ sub reCodeLeftoverSegment
 			      $codon_hash);
 	    return(1);
 	  }
-elsif(defined($fixed_partner_aln) || defined($change_this_aln)){
-verbose("Will not change: $fixed_partner_aln\n",
-        "Should change:   $change_this_aln\n",
-        "But could not find a filled partner.");}
-else{
-verbose("No source sequence for [$partner_seqid] could be found to change sequence: [$seqid:$divider-$map->{$seqid}->{$divider}->{STOP}] in [$pairid]");
-}
+	elsif(defined($fixed_partner_aln) || defined($change_this_aln))
+	  {debug("Will not change: $fixed_partner_aln\n",
+		 "Should change:   $change_this_aln\n",
+		 "But could not find a filled partner.")}
+	else
+	  {debug({LEVEL => 2},"No source sequence for [$partner_seqid] could ",
+		 "be found to change sequence: [$seqid:",
+		 "$divider-$map->{$seqid}->{$divider}->{STOP}] in [$pairid]");
+	 }
       }
 
     #Could not find a completed partner sequence
@@ -5517,6 +5654,7 @@ sub outputHybrids
   {
     my $seq_hash    = $_[0]->[0];
     my $source_hash = $_[0]->[1];
+    my $soln_stats  = $_[0]->[2];
     my $outfile     = $_[1];
 
     openOut(*OUT,$outfile) || return();
@@ -5540,6 +5678,8 @@ sub outputHybrids
 	foreach my $seqid (sort {$a cmp $b} keys(%{$source_hash->{SEQS}}))
 	  {print(">$seqid\n",$source_hash->{SEQS}->{$seqid},"\n")}
       }
+
+    return($soln_stats);
   }
 
 #This creates a hash containing references to the hash with the codon keys
@@ -5866,7 +6006,56 @@ sub loadSegments
     return(0);
   }
 
+#Globals used: $divider_warnings
+sub issueDividerWarnings
+  {
+    my $div_map = $_[0];
 
+    my $explanation =
+      join('',('Here is what this warning means: Between each closest pair ',
+	       'of included identity stretches, a midpoint is selected that ',
+	       'determines which alignment the sequence will be extracted ',
+	       'from or what regions need to be recoded.  Sometimes this ',
+	       'region can be aligned with a gap in different pairwise ',
+	       'alignments, which can confuse the determination of a ',
+	       'midpoint.  This warning may or may not result in issues ',
+	       'constructing the final sequences.  As long as the sequences ',
+	       'are marked as validated, the issue is a minor one and will ',
+	       'only affect homology in the regions between identity ',
+	       'segments.  If the sequences do not validate, these warnings ',
+	       'can be helpful in manually determining how to fix the ',
+	       'encoding and mixing of identity segments.  Any divider ',
+	       'labeled as "RECODE" indicates a position (from that to the ',
+	       'next divider and/or identity segment that may not be ',
+	       'optimally encoded.'));
+
+    foreach my $divwarnkey (keys(%$divider_warnings))
+      {
+	my $seqid    = $divider_warnings->{$divwarnkey}->{SEQID};
+	my $dividers = $divider_warnings->{$divwarnkey}->{DIVIDERS};
+	my $msg      = $divider_warnings->{$divwarnkey}->{MSG};
+	my $detail   = (exists($divider_warnings->{$divwarnkey}->{DETAIL}) ?
+			$divider_warnings->{$divwarnkey}->{DETAIL} : '');
+
+	#First, determine whether the undefined dividers were updated to source
+	#dividers.  No warning is necessary if all dividers are source dividers
+	my $dowarn = 0;
+	foreach my $divider (@$dividers)
+	  {
+	    #All these checks are expected to be true except the checks on TYPE
+	    #which hopefully are all false
+	    if(exists($div_map->{$seqid}) &&
+	       exists($div_map->{$seqid}->{$divider}) &&
+	       exists($div_map->{$seqid}->{$divider}->{TYPE}) &&
+	       (!defined($div_map->{$seqid}->{$divider}->{TYPE}) ||
+		$div_map->{$seqid}->{$divider}->{TYPE} ne 'SOURCE'))
+	      {$dowarn = 1}
+	  }
+
+	if($dowarn)
+	  {warning($msg,{DETAIL => $detail . $explanation})}
+      }
+  }
 
 
 
