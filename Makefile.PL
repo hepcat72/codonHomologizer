@@ -1,8 +1,8 @@
-#Makefile.PL version 1.0
+#Makefile.PL version 1.1
 
 use 5.010001;
 use ExtUtils::MakeMaker;
-my @scripts = qw(codonHomologizer.pl stretchAlign.pl);
+my @scripts = qw(codonHomologizer.pl stretchAlign.pl stretchMixer.pl);
 
 if(incompatibleMuscle(getExe('muscle')))
   {print STDERR ("WARNING: Muscle appears to be missing or potentially ",
