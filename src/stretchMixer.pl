@@ -5,7 +5,7 @@
 use CommandLineInterface;
 use warnings;
 use strict;
-require('ch_lib.pl'); #TODO: I'll turn this into a module later
+use CodonHomologizer;
 
 ##
 ## Describe the script
