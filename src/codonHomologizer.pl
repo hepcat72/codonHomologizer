@@ -11,7 +11,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.17';
+our $VERSION = '1.18';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
