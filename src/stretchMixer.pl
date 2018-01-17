@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.011';
+our $VERSION = '1.012';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -98,12 +98,28 @@ Note in the examples, which are submitted together in 1 run, each have the seque
 END_FORMAT
 		 );
 
+my $stretch_mins     = [];
+my $stretch_mins_def = [5,11];
+addArrayOption(GETOPTKEY   => 'stretch-min=s',
+	       GETOPTVAL   => $stretch_mins,
+	       REQUIRED    => 0,
+	       DEFAULT     => $stretch_mins_def,
+	       HIDDEN      => 0,
+	       INTERPOLATE => 1,
+	       SMRY_DESC   => 'Length of contiguous identity to search & mix.',
+	       DETAIL_DESC => << "END_DETAIL"
+
+This is the number of contiguous identical nucleotides between the sequences in the supplied alignments (see -i) for searching and mixing into the output sequences.  Every identical stretch of this length will be a candidate for weaving into the final output sequence for each input sequence present among the alignments.  Multiple lengths can be supplied.  The algorithm will attempt to insert them in descending size order.  The default values of 11 and 5 are based on the characteristics of recombination.  See --help --extended for more information.
+
+END_DETAIL
+	 );
+
 my $codon_file_type =
   addInfileOption(GETOPTKEY   => 'c|codon-file|codon-usage-file=s',
 		  REQUIRED    => 0,
 		  PRIMARY     => 0,
 		  DEFAULT     => undef,
-		  SMRY_DESC   => 'Codon usage file.',
+		  SMRY_DESC   => 'Codon usage input file.',
 		  DETAIL_DESC => << 'END_DETAIL'
 
 Tab-delimited file containing the single letter amino acid (AA) code, codon, and [optional] usage score (see -n).  This script will use the codons in this file to recode any sequence sections that have changed to include an identity optimize homology after a hybrid sequence is mixed together from multiple alignments.  In other words, if sequence 1 is changed to include a homologous stretch matching sequence 2, that portion of sequence 1 no longer has the optimal homology possible with sequence 3, so sequence 3 is recoded to best match sequence 1's new set of codons.
@@ -138,30 +154,30 @@ my $seq_out_type =
 		   REQUIRED      => 0,
 		   PRIMARY       => 1,
 		   HIDDEN        => 0,
-		   DETAIL_DESC   => 'Name of the output DNA sequence file.',
+		   DETAIL_DESC   => 'DNA sequence output file.',
 		   FORMAT_DESC   => 'Nucleotide fasta file.',
+		   COLLISIONMODE => 'merge',
+		   PAIR_WITH     => $seq_file_type,
+		   PAIR_RELAT    => 'ONETOMANY');
+
+debug("Seq out type ID: [$seq_out_type].");
+
+my $map_out_type =
+  addOutfileOption(GETOPTKEY     => 'p|map-outfile=s',
+		   REQUIRED      => 0,
+		   PRIMARY       => 1,
+		   HIDDEN        => 0,
+		   SMRY_DESC     => 'Sequence map output file.',
+		   FORMAT_DESC   => << 'END_FORMAT'
+
+Coded fasta file/map.  The purpose of this map is to convey which partner sequence a section of sequence is based on (using the alignments).  The sequences are mixed to try to include stretches of identity from multiple pairwise alignments.  Each sequence ID is assigned an arbitrary single letter code (only 26 sequences supported).  A legend with the character codes and which sequences they represent is printed at the top of the file as a comment.  There will be 1 fasta record for each sequence, consisting of the coded characters from the legend.  The character code at each position of the sequence indicates which sequence the nucleotide in the output sequence file (see --outfile) is based on.  The capitalization of the coded characters indicate whether the sequence in that position came directly from the pairwise alignment with the sequence represented by the coded character or whether the sequence was recoded to best match a version of the sequence indicated by the coded character.  In other words, a lower case coded character means that the sequence which with this portion was aligned was optimized with a third sequence.
+
+END_FORMAT
+		   ,
 		   COLLISIONMODE => 'merge',
 		   PAIR_WITH     => $seq_file_type,
 		   PAIR_RELAT    => 'ONETOMANY'
 		  );
-
-debug("Seq out type ID: [$seq_out_type].");
-
-my $stretch_mins     = [];
-my $stretch_mins_def = [5,11];
-addArrayOption(GETOPTKEY   => 'stretch-min=s',
-	       GETOPTVAL   => $stretch_mins,
-	       REQUIRED    => 0,
-	       DEFAULT     => $stretch_mins_def,
-	       HIDDEN      => 0,
-	       INTERPOLATE => 1,
-	       SMRY_DESC   => 'Length of contiguous identity to search & mix.',
-	       DETAIL_DESC => << "END_DETAIL"
-
-This is the number of contiguous identical nucleotides between the sequences in the supplied alignments (see -i) for searching and mixing into the output sequences.  Every identical stretch of this length will be a candidate for weaving into the final output sequence for each input sequence present among the alignments.  Multiple lengths can be supplied.  The algorithm will attempt to insert them in descending size order.  The default values of 11 and 5 are based on the characteristics of recombination.  See --help --extended for more information.
-
-END_DETAIL
-	 );
 
 my $no_usage = 0;
 addOption(GETOPTKEY   => 'n|ignore-codon-usage!',
@@ -196,6 +212,12 @@ addOption(GETOPTKEY   => 'm|method=s',
 			  "recoded in that region to match sequence A's " .
 			  'codons that were optimized for sequence B.'),
 	  ACCEPTS     => $weighting_methods);
+
+#This is only here to not show the default added suffix option
+addOutfileSuffixOption(GETOPTKEY     => 'o=s',
+		       REQUIRED      => 0,
+		       HIDDEN        => 1,
+		       FILETYPEID    => $seq_file_type);
 
 addOutdirOption(GETOPTKEY   => 'dir|outdir=s',
 		REQUIRED    => 0,
@@ -245,13 +267,7 @@ while(nextFileCombo())
     my $codonUsageFile = getInfile($codon_file_type);
     my $alnFile        = getInfile($seq_file_type);
     my $ntOutFile      = getOutfile($seq_out_type);
-
-    if(!defined($ntOutFile))
-      {
-	debug('Got an undefined outfile.  Replacing with dash, since this is ',
-	      'a primary outfile type.');
-	$ntOutFile = '-';
-      }
+    my $mapOutFile     = getOutfile($map_out_type);
 
     #Read in this usage file if we haven't already
     if(defined($codonUsageFile) &&
@@ -278,6 +294,7 @@ while(nextFileCombo())
 	$input_data_hash->{$ntOutFile}->{DATA}    = {};
 	$input_data_hash->{$ntOutFile}->{MTXHASH} =
 	  $matrix_data_hash->{$codonUsageFile};
+	$input_data_hash->{$ntOutFile}->{MAPFILE} = $mapOutFile;
       }
 
     loadAlignment($alnFile,
@@ -326,7 +343,8 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
 				    $input_data_hash->{$outfile}->{CDNHASH},
 				    $input_data_hash->{$outfile}->{MTXHASH},
 				    $stretch_mins),
-		    $outfile);
+		    $outfile,
+		    $input_data_hash->{$outfile}->{MAPFILE});
 
     outputStats($solution,
 		$input_data_hash->{$outfile}->{DATA},
@@ -5654,6 +5672,7 @@ sub outputHybrids
     my $source_hash = $_[0]->[1];
     my $soln_stats  = $_[0]->[2];
     my $outfile     = $_[1];
+    my $mapfile     = $_[2];
 
     openOut(*OUT,$outfile) || return();
 
@@ -5664,17 +5683,23 @@ sub outputHybrids
 
     if(exists($source_hash->{LEGEND}))
       {
-	print("\nSource sequence legend.  Each sequence is represented by a ",
+	#If it doesn't open, we'll be printing to STDOUT, so print a newline to
+	#visually separate it from the output above
+	unless(openOut(*MAP,$mapfile))
+	  {print("\n")}
+
+	print("#Source sequence legend.  Each sequence is represented by a ",
 	      "character code.  The sequences below are composed of ",
 	      "character codes that indicate the source of the sequence, ",
 	      "which can be directly extracted from a pairwise aligning ",
 	      "(upper-case) or recoded to match a sequence that was ",
 	      "extracted from an unrelated pairwise alignment (lower-case)\n");
 	foreach my $seqid (sort {$a cmp $b} keys(%{$source_hash->{LEGEND}}))
-	  {print("$seqid\t",uc($source_hash->{LEGEND}->{$seqid}),"\n")}
-	print("\n");
+	  {print("#$seqid\t",uc($source_hash->{LEGEND}->{$seqid}),"\n")}
 	foreach my $seqid (sort {$a cmp $b} keys(%{$source_hash->{SEQS}}))
 	  {print(">$seqid\n",$source_hash->{SEQS}->{$seqid},"\n")}
+
+	closeOut(*MAP);
       }
 
     return($soln_stats);
