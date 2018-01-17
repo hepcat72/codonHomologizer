@@ -92,7 +92,8 @@ my($required_infile_types,
    $required_relationships,
    $outdirs_added,
    $accepts_hash,
-   $primary_infile_type,
+   $primary_infile_type,       #Index into input_files_array
+   $flagless_multival_type,    #Index into usage_array
    $usage_array,
    $infile_flag_array,
    $outfile_flag_array,
@@ -228,6 +229,7 @@ sub _init
     $required_relationships       = []; #Array of arrays: [[id1,id2,'1:M'],...]
     $accepts_hash                 = {}; #A hash of array of scalars
     $primary_infile_type          = undef;
+    $flagless_multival_type       = undef;
     $usage_array                  = [];
     $infile_flag_array            = []; #[file type index] = primary flag
     $outfile_flag_array           = []; #[suffix id] = primary flag
@@ -390,7 +392,7 @@ sub addInfileOption
   {
     my @in = getSubParams([qw(GETOPTKEY REQUIRED DEFAULT PRIMARY HIDDEN
 			      SMRY_DESC DETAIL_DESC FORMAT_DESC PAIR_WITH
-                              PAIR_RELAT)],
+                              PAIR_RELAT FLAGLESS)],
 			  [scalar(@_) ? qw(GETOPTKEY) : ()],
 			  [@_]);
     my $get_opt_str = $in[0]; #e.g. 'i|input-file=s'
@@ -406,6 +408,7 @@ sub addInfileOption
     my $format_desc = $in[7]; #e.g. 'Tab delimited text w/ columns: 1. Name...'
     my $req_with    = $in[8]; #File type ID (as returned by this sub)
     my $req_rel_str = getRelationStr($in[9]); #e.g. 1,1:1,1:M,1:1orM
+    my $flagless    = $in[10];#Whether the option can be supplied sans flag
 
     #Trim leading hard returns and white space characters (from using '<<')
     $smry_desc   =~ s/^\s+//s if(defined($smry_desc));
@@ -494,6 +497,9 @@ sub addInfileOption
     if(!defined($primary))
       {$primary = 0}
 
+    if(!defined($flagless))
+      {$flagless = 0}
+
     my $flags = join(',',getOptStrFlags($get_opt_str));
     my $flag  = getDefaultFlag($flags,',');
 
@@ -561,16 +567,12 @@ sub addInfileOption
 
     if($primary)
       {
-	if(exists($GetOptHash->{'<>'}))
+	if(defined($primary_infile_type))
 	  {
 	    error("Multiple primary input file options supplied ",
 		  "[$get_opt_str].  Only 1 is allowed.");
 	    return(undef);
 	  }
-
-	$getoptsub = 'sub {checkFileOpt($_[0],1);push(@{$input_files_array->['.
-	  $file_type_index . ']},[sglob($_[0])])}';
-	$GetOptHash->{'<>'} = eval($getoptsub);
 
 	$primary_infile_type = $file_type_index;
 
@@ -594,6 +596,33 @@ sub addInfileOption
 	  {$default_str = $defaultadd}
       }
 
+    if($flagless)
+      {
+	if(defined($flagless_multival_type) && $flagless_multival_type > -1)
+	  {
+	    error("An additional multi-value option has been designated as ",
+		  "'flagless': [$get_opt_str]: [$flagless].  Only 1 is ",
+		  "allowed.",
+		  {DETAIL => "First flagless option was: [" .
+		   $usage_array->[$flagless_multival_type]->{OPTFLAG} . "]."});
+	    return(undef);
+	  }
+
+	$getoptsub = 'sub {checkFileOpt($_[0],1);push(@{$input_files_array->['.
+	  $file_type_index . ']},[sglob($_[0])])}';
+	$GetOptHash->{'<>'} = eval($getoptsub);
+
+	#This assumes that the call to addToUsage a few lines below is the
+	#immediate next call to addToUsage
+	$flagless_multival_type = getNextUsageIndex();
+
+	my($flagsadd,$detailsadd) = getFlaglessUsageAddendums();
+
+	$flags .= $flagsadd;
+
+	$detail_desc .= $detailsadd;
+      }
+
     if($required)
       {push(@$required_infile_types,$file_type_index)}
 
@@ -601,7 +630,7 @@ sub addInfileOption
 
     push(@$usage_file_indexes,
 	 addToUsage($flags,$smry_desc,$detail_desc,$required,$default_str,
-		    undef,$hidden,'infile',$primary,$format_desc,
+		    undef,$hidden,'infile',$flagless,$primary,$format_desc,
 		    $file_type_index));
 
     debug({LEVEL => -1},"Adding input file type [$file_type_index] as a key ",
@@ -832,14 +861,20 @@ sub addRequiredRelationship
 #that accepts input on stdin. [flags,detail_desc,default]
 sub getPrimaryUsageAddendums
   {
-    return(',*',
+    return(',STDIN',
 	   join('',("  May be supplied on standard in.  When standard input ",
 		    "detected and ",getFileFlag($primary_infile_type),
 		    " is given only 1 argument, it will be used as a file ",
 		    "name stub for appending outfile suffixes.  See ",
-		    "--extended --help for advanced usage examples.\n",
-		    "*No flag required.")),
+		    "--extended --help for advanced usage examples.")),
 	   'stdin if present');
+  }
+
+sub getFlaglessUsageAddendums
+  {
+    if(!defined($flagless_multival_type) || $flagless_multival_type < 0)
+      {return('','')}
+    return(',*',"\n*No flag required.");
   }
 
 #Checks strings for 7 types of params: infile, outfile, suffix, outdir,
@@ -981,7 +1016,7 @@ sub addOutfileOption
   {
     my @in = getSubParams([qw(GETOPTKEY COLLISIONMODE REQUIRED PRIMARY DEFAULT
 			      SMRY_DESC DETAIL_DESC FORMAT_DESC HIDDEN
-			      PAIR_WITH PAIR_RELAT)],
+			      PAIR_WITH PAIR_RELAT FLAGLESS)],
 			  [scalar(@_) ? qw(GETOPTKEY) : ()],
 			  [@_]);
     my $get_opt_str = $in[0]; #e.g. 'o|outfile=s'
@@ -997,6 +1032,7 @@ sub addOutfileOption
                               #usage output.
     my $req_with    = $in[9]; #File type ID (as returned by this sub)
     my $req_rel_str = getRelationStr($in[10]); #e.g. 1,1:1,1:M,1:1orM
+    my $flagless    = $in[11];#Whether the option can be supplied sans flag
 
     #Trim leading hard returns and white space characters (from using '<<')
     $smry_desc   =~ s/^\s+//s if(defined($smry_desc));
@@ -1091,6 +1127,9 @@ sub addOutfileOption
     elsif(!defined($hidden))
       {$hidden = 0}
 
+    if(!defined($flagless))
+      {$flagless = 0}
+
     my $flags = join(',',getOptStrFlags($get_opt_str));
     my $flag  = getDefaultFlag($flags,',');
 
@@ -1150,6 +1189,33 @@ sub addOutfileOption
     if($required)
       {push(@$required_outfile_types,$file_type_index)}
 
+    if($flagless)
+      {
+	if(defined($flagless_multival_type) && $flagless_multival_type > -1)
+	  {
+	    error("An additional multi-value option has been designated as ",
+		  "'flagless': [$get_opt_str]: [$flagless].  Only 1 is ",
+		  "allowed.",
+		  {DETAIL => "First flagless option was: [" .
+		   $usage_array->[$flagless_multival_type]->{OPTFLAG} . "]."});
+	    return(undef);
+	  }
+
+	$getoptsub = 'sub {checkFileOpt($_[0],1);push(@{$input_files_array->['.
+	  $file_type_index . ']},[sglob($_[0])])}';
+	$GetOptHash->{'<>'} = eval($getoptsub);
+
+	#This assumes that the call to addToUsage a few lines below is the
+	#immediate next call to addToUsage
+	$flagless_multival_type = getNextUsageIndex();
+
+	my($flagsadd,$detailsadd) = getFlaglessUsageAddendums();
+
+	$flags .= $flagsadd;
+
+	$detail_desc .= $detailsadd;
+      }
+
     addRequiredRelationship($file_type_index,$req_with,$req_rel_str);
 
     if($default_str eq '' && $primary && !$required)
@@ -1168,7 +1234,7 @@ sub addOutfileOption
 
     push(@$usage_file_indexes,
 	 addToUsage($flags,$smry_desc,$detail_desc,$required,$default_str,
-		    undef,$hidden,'outfile',$primary,$format_desc,
+		    undef,$hidden,'outfile',$flagless,$primary,$format_desc,
 		    $file_type_index));
 
     ##
@@ -1602,6 +1668,7 @@ sub addOutfileSuffixOption
 	       undef,
 	       $hidden,
 	       'suffix',
+	       0,
 	       $primary,
 	       $format_desc,
 	       $suffix_id);
@@ -1923,7 +1990,7 @@ sub createSuffixOutfileTagteam
 	$sf_usage->{PRIMARY} = $primary;
       }
 
-    #Set $primary from the file IDs
+    #Set $required from the file IDs
     debug({LEVEL => -2},"Arbitrarily setting REQUIRED to the value ",
 	  ($outf_explicit ? "from the outfile option [$of_usage->{REQUIRED}]" :
 	   ($suff_explicit ? "from the suffix option [$sf_usage->{REQUIRED}]" :
@@ -2278,7 +2345,7 @@ sub isCaller
 sub addOutdirOption
   {
     my @in = getSubParams([qw(GETOPTKEY REQUIRED DEFAULT HIDDEN SMRY_DESC
-			      DETAIL_DESC)],
+			      DETAIL_DESC FLAGLESS)],
 			  [scalar(@_) ? qw(GETOPTKEY) : ()],
 			  [@_]);
     my $get_opt_str = $in[0]; #e.g. 'outdir=s'
@@ -2289,6 +2356,7 @@ sub addOutdirOption
     my $smry_desc   = $in[4]; #e.g. 'Input file(s).  See --help for format.'
                               #Empty/undefined = exclude from short usage
     my $detail_desc = $in[5]; #e.g. 'Input file(s).  Space separated,...'
+    my $flagless    = $in[6]; #Whether the option can be supplied sans flag
 
     #Trim leading hard returns and white space characters (from using '<<')
     $smry_desc   =~ s/^\s+//s if(defined($smry_desc));
@@ -2321,6 +2389,9 @@ sub addOutdirOption
 
     if(defined($required) && $required !~ /^\d+$/)
       {error("Invalid REQUIRED parameter: [$required].")}
+
+    if(!defined($flagless))
+      {$flagless = 0}
 
     my $flags = join(',',getOptStrFlags($get_opt_str));
     my $flag  = getDefaultFlag($flags,',');
@@ -2438,6 +2509,33 @@ sub addOutdirOption
 
     $required_outdirs = $required;
 
+    if($flagless)
+      {
+	if(defined($flagless_multival_type) && $flagless_multival_type > -1)
+	  {
+	    error("An additional multi-value option has been designated as ",
+		  "'flagless': [$get_opt_str]: [$flagless].  Only 1 is ",
+		  "allowed.",
+		  {DETAIL => "First flagless option was: [" .
+		   $usage_array->[$flagless_multival_type]->{OPTFLAG} . "]."});
+	    return(undef);
+	  }
+
+	$getoptsub = 'sub {checkFileOpt($_[0],1);push(@$outdirs_array,' .
+	  '[sglob($_[0])])}';
+	$GetOptHash->{'<>'} = eval($getoptsub);
+
+	#This assumes that the call to addToUsage a few lines below is the
+	#immediate next call to addToUsage
+	$flagless_multival_type = getNextUsageIndex();
+
+	my($flagsadd,$detailsadd) = getFlaglessUsageAddendums();
+
+	$flags .= $flagsadd;
+
+	$detail_desc .= $detailsadd;
+      }
+
     addToUsage($flags,
 	       $smry_desc,
 	       $detail_desc,
@@ -2445,7 +2543,8 @@ sub addOutdirOption
 	       $default,
 	       undef,
 	       $hidden,
-	       'outdir');
+	       'outdir',
+	       0);
   }
 
 sub addOption
@@ -2503,7 +2602,7 @@ sub addOption
     #validity and thus they don't need to have isGetOptStrValid called on them
     my $is_array_opt =
       ($calling_sub =~ /^CommandLineInterface::add(2D)?ArrayOption$/g);
-    #Variable options should be checked for vaalidity, but not for duplicates.
+    #Variable options should be checked for validity, but not for duplicates.
     #They are always present though as of the initial _init call, though not
     #always presented in the interface, thus the check should allow duplicates.
     my $is_variable_opt =
@@ -2580,7 +2679,8 @@ sub addOption
 	       $default,
 	       $accepts,
 	       $hidden,
-	       $genopttype);
+	       $genopttype,
+	       0);
   }
 
 #Returns one of the following strings: bool,negbool,count,scalar,unk.
@@ -2605,7 +2705,8 @@ sub getGeneralOptType
 sub addArrayOption
   {
     my @in = getSubParams([qw(GETOPTKEY GETOPTVAL REQUIRED DEFAULT HIDDEN
-			      SMRY_DESC DETAIL_DESC INTERPOLATE ACCEPTS)],
+			      SMRY_DESC DETAIL_DESC INTERPOLATE ACCEPTS
+			      FLAGLESS)],
 			  [qw(GETOPTKEY GETOPTVAL)],
 			  [@_]);
     my $get_opt_str     = $in[0]; #e.g. 'o|outfile-suffix=s'
@@ -2619,6 +2720,7 @@ sub addArrayOption
     my $detail_desc     = $in[6]; #e.g. 'Input file(s).  Space separated,...'
     my $interpolate     = $in[7]; #0 or non-0. non-0 mean shell interp of vals
     my $accepts         = $in[8]; #e.g. ['yes','no']
+    my $flagless        = $in[9]; #Whether the option can be supplied sans flag
 
     #Trim leading hard returns and white space characters (from using '<<')
     $smry_desc   =~ s/^\s+//s if(defined($smry_desc));
@@ -2644,6 +2746,9 @@ sub addArrayOption
 
     if(defined($required) && $required !~ /^\d+$/)
       {error("Invalid REQUIRED parameter: [$required].")}
+
+    if(!defined($flagless))
+      {$flagless = 0}
 
     my $flags = join(',',getOptStrFlags($get_opt_str));
     my $flag  = getDefaultFlag($flags,',');
@@ -2721,6 +2826,37 @@ sub addArrayOption
       {warning("Default value supplied to addArrayOption should either be a ",
 	       "scalar or a reference to an array of scalars.")}
 
+    if($flagless)
+      {
+	if(defined($flagless_multival_type) && $flagless_multival_type > -1)
+	  {
+	    error("An additional multi-value option has been designated as ",
+		  "'flagless': [$get_opt_str]: [$flagless].  Only 1 is ",
+		  "allowed.",
+		  {DETAIL => "First flagless option was: [" .
+		   $usage_array->[$flagless_multival_type]->{OPTFLAG} . "]."});
+	    return(undef);
+	  }
+
+	my $getoptsub;
+	if(defined($interpolate) && $interpolate)
+	  {$getoptsub = sub {push(@$get_opt_ref,sglob($_[0]))}}
+	else
+	  {$getoptsub = sub {push(@$get_opt_ref,$_[0])}}
+	#No need to do an else, because it would have caused a return above
+	$GetOptHash->{'<>'} = $getoptsub;
+
+	#This assumes that the call to addToUsage a few lines below is the
+	#immediate next call to addToUsage
+	$flagless_multival_type = getNextUsageIndex();
+
+	my($flagsadd,$detailsadd) = getFlaglessUsageAddendums();
+
+	$flags .= $flagsadd;
+
+	$detail_desc .= $detailsadd;
+      }
+
     addOption($get_opt_str,
 	      $sub,
 	      $required,
@@ -2734,7 +2870,7 @@ sub addArrayOption
 sub add2DArrayOption
   {
     my @in = getSubParams([qw(GETOPTKEY GETOPTVAL REQUIRED DEFAULT HIDDEN
-			      SMRY_DESC DETAIL_DESC ACCEPTS)],
+			      SMRY_DESC DETAIL_DESC ACCEPTS FLAGLESS)],
 			  [qw(GETOPTKEY GETOPTVAL)],
 			  [@_]);
     my $get_opt_str     = $in[0]; #e.g. 'o|outfile-suffix=s'
@@ -2747,6 +2883,7 @@ sub add2DArrayOption
                                   #Empty/undefined = exclude from short usage
     my $detail_desc     = $in[6]; #e.g. 'Input file(s).  Space separated,...'
     my $accepts         = $in[7]; #e.g. ['yes','no']
+    my $flagless        = $in[8]; #Whether the option can be supplied sans flag
 
     #Trim leading hard returns and white space characters (from using '<<')
     $smry_desc   =~ s/^\s+//s if(defined($smry_desc));
@@ -2772,6 +2909,9 @@ sub add2DArrayOption
 
     if(defined($required) && $required !~ /^\d+$/)
       {error("Invalid REQUIRED parameter: [$required].")}
+
+    if(!defined($flagless))
+      {$flagless = 0}
 
     my $flags = join(',',getOptStrFlags($get_opt_str));
     my $flag  = getDefaultFlag($flags,',');
@@ -2850,6 +2990,38 @@ sub add2DArrayOption
       {warning("Default value supplied to addArrayOption should either be a ",
 	       "scalar or a reference to an array of references to arrays of ",
 	       "scalars.")}
+
+    if($flagless)
+      {
+	if(defined($flagless_multival_type) && $flagless_multival_type > -1)
+	  {
+	    error("An additional multi-value option has been designated as ",
+		  "'flagless': [$get_opt_str]: [$flagless].  Only 1 is ",
+		  "allowed.",
+		  {DETAIL => "First flagless option was: [" .
+		   $usage_array->[$flagless_multival_type]->{OPTFLAG} . "]."});
+	    return(undef);
+	  }
+
+	my $getoptsub;
+	if(defined($get_opt_ref) &&
+	   ref($get_opt_ref) eq 'SCALAR' && ref($$get_opt_ref) eq 'ARRAY')
+	  {$getoptsub = sub {push(@{$$get_opt_ref},[sglob($_[0])])}}
+	elsif(defined($get_opt_ref) && ref($get_opt_ref) eq 'ARRAY')
+	  {$getoptsub = sub {push(@{$get_opt_ref},[sglob($_[0])])}}
+	#No need to do an else, because it would have caused a return above
+	$GetOptHash->{'<>'} = $getoptsub;
+
+	#This assumes that the call to addToUsage a few lines below is the
+	#immediate next call to addToUsage
+	$flagless_multival_type = getNextUsageIndex();
+
+	my($flagsadd,$detailsadd) = getFlaglessUsageAddendums();
+
+	$flags .= $flagsadd;
+
+	$detail_desc .= $detailsadd;
+      }
 
     addOption($get_opt_str,
 	      $sub,
@@ -2976,7 +3148,8 @@ sub addOptions
 		    $getopthash->{$get_opt_str}),
 		   undef,
 		   0,
-		   getGeneralOptType($get_opt_str));
+		   getGeneralOptType($get_opt_str),
+		   0);
       }
   }
 
@@ -3032,11 +3205,12 @@ sub addToUsage
     my $accepts     = $_[5]; #Array of scalars
     my $hidden      = $_[6];
     my $opttype     = defined($_[7]) ? $_[7] : 'scalar';
+    my $flagless    = defined($_[8]) ? $_[8] : 0;
 
     #For in/out file types (used in help output)
-    my $primary     = defined($_[8]) ? $_[8] : 0;
-    my $format_desc = $_[9];
-    my $file_id     = $_[10];
+    my $primary     = defined($_[9]) ? $_[9] : 0;
+    my $format_desc = $_[10];
+    my $file_id     = $_[11];
 
     if(!defined($flags_str))
       {
@@ -3053,9 +3227,10 @@ sub addToUsage
 			DEFAULT   => $default,
 			ACCEPTS   => $accepts,
 		        HIDDEN    => (defined($hidden) ? $hidden : 0),
-			OPTTYPE   => $opttype, #bool,negbool,count,scalar,
-                                               #array,infile,outfile,outdir,
-                                               #suffix,unk
+			OPTTYPE   => $opttype,  #bool,negbool,count,scalar,
+                                                #array,infile,outfile,outdir,
+                                                #suffix,unk
+			FLAGLESS  => $flagless, #1 or 0
 
 			#File option info
 			PRIMARY   => $primary, #primary means stdin/out default
@@ -3069,6 +3244,9 @@ sub addToUsage
 
     return($usage_index);
   }
+
+sub getNextUsageIndex
+  {return(scalar(@$usage_array))}
 
 #Globals used: $usage_array
 sub getFileUsageHash  {
@@ -3981,14 +4159,9 @@ sub addDefaultFileOptions
 			     (0..$#{$input_files_array}))[0];
 
     #If the programmer did not assign a primary input file type, pick a default
-    if(!defined($primary_infile_type) && !exists($GetOptHash->{'<>'}))
+    if(!defined($primary_infile_type))
       {
 	$primary_infile_type = $first_infile_type;
-
-	my $getoptsub =
-	  'sub {checkFileOpt($_[0],1);push(@{$input_files_array->[' .
-	    $first_infile_type . ']},[sglob($_[0])])}';
-	$GetOptHash->{'<>'} = eval($getoptsub);
 
 	my($flagsadd,$detailsadd,$defaultadd) = getPrimaryUsageAddendums();
 	$usage_array->[$usage_file_indexes->[$first_infile_type]]->{OPTFLAG} .=
@@ -3997,6 +4170,28 @@ sub addDefaultFileOptions
 	  $detailsadd;
 	$usage_array->[$usage_file_indexes->[$first_infile_type]]->{DEFAULT} .=
 	  $defaultadd;
+      }
+
+    #If the programmer did not assign any multi-value option as 'flagless', set
+    #the primary input file as flagless
+    if(!defined($flagless_multival_type) || $flagless_multival_type < 0)
+      {
+	#Keep track globally of which option is the multi-value flagless one
+	$flagless_multival_type = $usage_file_indexes->[$primary_infile_type];
+
+	my $getoptsub =
+	  'sub {checkFileOpt($_[0],1);push(@{$input_files_array->[' .
+	    $primary_infile_type . ']},[sglob($_[0])])}';
+	$GetOptHash->{'<>'} = eval($getoptsub);
+
+	$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+	  ->{FLAGLESS} = 1;
+
+	my($flagsadd,$detailsadd) = getFlaglessUsageAddendums();
+	$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+	  ->{OPTFLAG} .= $flagsadd;
+	$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+	  ->{DETAILS} .= $detailsadd;
       }
 
     my $num_outfile_types = scalar(keys(%$outfile_types_hash));
@@ -6469,7 +6664,7 @@ sub warning
     my $detail_alert  = "Supply --extended for additional details.";
 
     #Gather and concatenate the warning message and split on hard returns
-    my @warning_message = split(/\n/,join('',grep {defined($_)} @_));
+    my @warning_message = split(/\n/,join('',grep {defined($_)} @params));
     push(@warning_message,'') unless(scalar(@warning_message));
     pop(@warning_message) if(scalar(@warning_message) > 1 &&
 			     $warning_message[-1] !~ /\S/);
@@ -12429,7 +12624,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.078';
+    $VERSION       = '4.082';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
