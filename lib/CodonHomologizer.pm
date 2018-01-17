@@ -1,4 +1,19 @@
-#Library of methods used by codonHomologizer.pl and stretchMixer.pl
+package CodonHomologizer;
+#Module containing methods used by codonHomologizer.pl and stretchMixer.pl
+
+our($VERSION);
+
+#If this module is being used on the command line (with -e, for example), we
+#need to ensure it has loaded CommandLineInterface and that the default run
+#mode is set to 'run' so that it doesn't print a usage (which is the behavior
+#of the default run mode
+unless(exists($INC{'CommandLineInterface.pm'}))
+  {
+    use CommandLineInterface qw(verbose      verboseOverMe  debug    error
+				warning      openIn         closeIn  getLine
+				setDefaults);
+    setDefaults(DEFRUNMODE => 'run');
+  }
 
 #Creates a hash from a tab delimited file like this:
 #G	GGG	0.11	Gly
@@ -343,9 +358,13 @@ sub getCrossover1ScoreHash
     #Add the incremental flexibility scores to the total score
     foreach my $flex_code (keys(%$best_flex_min_usage))
       {
-	debug("Flex score for code [$flex_code]: [$flex_scores->{$flex_code}].") if($testcase);
+	debug("Flex score for code [$flex_code]: ",
+	      "[$flex_scores->{$flex_code}].") if($testcase);
 
-	debug("Usage score: [($best_flex_min_usage->{$flex_code} / $max_global_usage) * $max_usg_score = ",(($best_flex_min_usage->{$flex_code} / $max_global_usage) * $max_usg_score),"].") if($testcase);
+	debug("Usage score: [($best_flex_min_usage->{$flex_code} / ",
+	      "$max_global_usage) * $max_usg_score = ",
+	      (($best_flex_min_usage->{$flex_code} / $max_global_usage) *
+	       $max_usg_score),"].") if($testcase);
 
 	#Add the flexibility score
 	$score += $flex_scores->{$flex_code} +
@@ -1256,6 +1275,26 @@ sub getNextFastqRec
       }
     else
       {return(undef)}
+  }
+
+BEGIN
+  {
+    #Enable export of subs & vars
+    require Exporter;
+    $VERSION       = '1.002';
+    our @ISA       = qw(Exporter);
+    our @EXPORT    = qw(readUsageFile          createMatrix
+			createMatrixCrossover1 getMaxMatches
+                        getAminoAcids          getMaxUsage
+			getCrossover1ScoreHash matrixToString
+			array2DToString        pwMatrixToString
+                        roundInt               getNumCodonMatches
+                        getCodons              getUsageScore
+                        getUsageScore2         getCrossover1FlexCode
+                        parseIDFromDef         getNextSeqRec
+                        getNextFastaRec        formatSequence
+                        getNextFastqRec);
+    our @EXPORT_OK = qw();
   }
 
 1;
