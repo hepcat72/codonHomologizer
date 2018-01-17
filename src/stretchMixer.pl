@@ -11,7 +11,7 @@ require('ch_lib.pl'); #TODO: I'll turn this into a module later
 ## Describe the script
 ##
 
-our $VERSION = '1.010';
+our $VERSION = '1.011';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -2037,9 +2037,6 @@ sub scoreSolution
 		$last_pos = $pos;
 	      }
 
-	    debug("Sequence [$seqid] has [$tmp_inclusion_score] identity ",
-		  "segments >= size [$max_size].");
-
 	    #Calculate the last number of unique/independent segments
 	    my $usegs = int($cur_size / $max_size);
 	    if($usegs > 0)
@@ -2507,10 +2504,11 @@ sub reduceSolutionForIndirectConflicts
 	$iter_num++;
 
 	if($iter_num >= $warn_limit)
-	  {warning("The search for indirect overlap is going longer than ",
-		   "expected.  Found $still_finding_overlap boundaries on ",
-		   "iteration $iter_num (the number of new boundaries found ",
-		   "each iteration should be (generally) trending down).")}
+	  {verbose("The search for indirect overlap is going longer than ",
+		   "expected.  Found $still_finding_overlap boundaries ",
+		   "on iteration $iter_num (the number of new boundaries ",
+		   "found each iteration should be (generally) trending ",
+		   "down).")}
 
 	$still_finding_overlap = 0;
 
@@ -6035,7 +6033,8 @@ sub issueDividerWarnings
 	my $dividers = $divider_warnings->{$divwarnkey}->{DIVIDERS};
 	my $msg      = $divider_warnings->{$divwarnkey}->{MSG};
 	my $detail   = (exists($divider_warnings->{$divwarnkey}->{DETAIL}) ?
-			$divider_warnings->{$divwarnkey}->{DETAIL} : '');
+			$divider_warnings->{$divwarnkey}->{DETAIL} . '  ' :
+			'');
 
 	#First, determine whether the undefined dividers were updated to source
 	#dividers.  No warning is necessary if all dividers are source dividers
