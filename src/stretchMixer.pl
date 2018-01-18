@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.012';
+our $VERSION = '1.013';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -5054,7 +5054,7 @@ sub weaveSeqs
 	  }
 
 	#Check that all the identity segments in the solution were included
-	my $bad_nts = validateSegments($seqid,$soln,$seqhash,$data);
+	my $bad_nts = validateRepairSegments($seqid,$soln,$seqhash,$data);
 
 	#Check that the sequences encode the same AA sequence
 	my $any_orig_aa = uc(translate($any_orig_seq,     $codon_hash->{REV}));
@@ -5065,10 +5065,12 @@ sub weaveSeqs
 		 "[$any_pair_id].",
 		 {DETAIL => "ORIG: [$any_orig_aa]\nNEW:  [$mixed_aa]"})}
 	if($bad_nts)
-	  {error("The new mixed hybrid version of sequence [$seqid] failed ",
-		 "validation of the inclusion of all the identity segments ",
-		 "and expected alternate codons.  There were [$bad_nts] ",
-		 "nucleotides that were not as expected.")}
+	  {warning("The new mixed hybrid version of sequence [$seqid] failed ",
+		   "validation of the inclusion of all the identity segments ",
+		   "and expected alternate codons, but was repaired.  There ",
+		   "were [$bad_nts] nucleotides that were not as expected, ",
+		   "and replaced to preserve the integrity of the identity ",
+		   "segments.")}
 	if(isVerbose())
 	  {
 	    my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
@@ -5076,8 +5078,9 @@ sub weaveSeqs
 					      '' : 'NOT '),
 		    "Validated",($any_orig_aa eq $mixed_aa ? '^' : ''),
 		    ".  Identity segment inclusion: ",($bad_nts ? 'NOT ' : ''),
-		    "Validated",($bad_nts ? " ([$bad_nts] nts in identity " .
-				 "segments not as expected.)" : '#'),
+		    "Validated",
+		    ($bad_nts ? " (but [$bad_nts] nts in identity segments " .
+		     "were repaired.)" : '#'),
 		    "  [$n/",length($any_orig_seq),"] nts changed*.");
 	  }
       }
@@ -5119,7 +5122,7 @@ sub weaveSeqs
     return($seqhash,$sourceseqs);
   }
 
-sub validateSegments
+sub validateRepairSegments
   {
     my $seqid   = $_[0];
     my $soln    = $_[1];
@@ -5146,7 +5149,7 @@ sub validateSegments
 	  }
 	elsif($type eq 'alt')
 	  {
-	    #W're going to assume that the alternate codon was selected
+	    #We're going to assume that the alternate codon was selected
 	    #correctly.  There might be identity characters on each side and
 	    #there's no way to know which characters are a part of the identity
 	    #because it wasn't saved.  So just to make things easier yet still
@@ -5165,6 +5168,7 @@ sub validateSegments
 	  }
 
 	my $actual_nts = uc(substr($seqhash->{$seqid},$idstart - 1,$idlen));
+	my $new_bad    = 0;
 
 	for(my $pos = 0;$pos < length($actual_nts);$pos++)
 	  {
@@ -5175,8 +5179,13 @@ sub validateSegments
 		debug("Unexpected identity segment sequence at: [$seqid:",
 		      ($idstart+$pos),"].");
 		$bad_cnt++;
+		$new_bad = 1;
 	      }
 	  }
+
+	#Repair problems
+	if($new_bad)
+	  {substr($seqhash->{$seqid},$idstart - 1,$idlen,$expected_nts)}
       }
 
     return($bad_cnt);
