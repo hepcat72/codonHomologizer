@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.014';
+our $VERSION = '1.015';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -57,6 +57,7 @@ my $seq_file_type =
 		  PRIMARY     => 1,
 		  DEFAULT     => undef,
 		  SMRY_DESC   => 'Nucleotide alignment files.',
+		  DETAIL_DESC => 'Nucleotide alignment files.',
 		  FORMAT_DESC => << 'END_FORMAT'
 
 The nucleotide alignment files must be in aligned fasta format, as output by codonHomologizer.pl.  At least 2 files are required.  Each file must contain exactly 2 sequences.  At least 1 sequence ID must be present in more than 1 file, their unaligned length must be the same, and their codons should differ (otherwise, this script will simply output the same sequence that was input, which would be pointless).  2 alignment files must not contain the same pair of sequence IDs.  The case of the sequences does not matter.
@@ -100,7 +101,7 @@ END_FORMAT
 
 my $stretch_mins     = [];
 my $stretch_mins_def = [5,11];
-addArrayOption(GETOPTKEY   => 'stretch-min=s',
+addArrayOption(GETOPTKEY   => 's|stretch-min=s',
 	       GETOPTVAL   => $stretch_mins,
 	       REQUIRED    => 0,
 	       DEFAULT     => $stretch_mins_def,
@@ -150,10 +151,11 @@ END_FORMAT
 		 );
 
 my $seq_out_type =
-  addOutfileOption(GETOPTKEY     => 'outfile|output-file=s',
+  addOutfileOption(GETOPTKEY     => 'o|outfile|output-file=s',
 		   REQUIRED      => 0,
 		   PRIMARY       => 1,
 		   HIDDEN        => 0,
+		   SMRY_DESC     => 'DNA sequence output file.',
 		   DETAIL_DESC   => 'DNA sequence output file.',
 		   FORMAT_DESC   => 'Nucleotide fasta file.',
 		   COLLISIONMODE => 'merge',
@@ -163,12 +165,13 @@ my $seq_out_type =
 debug("Seq out type ID: [$seq_out_type].");
 
 my $map_out_type =
-  addOutfileOption(GETOPTKEY     => 'p|map-outfile=s',
-		   REQUIRED      => 0,
-		   PRIMARY       => 1,
-		   HIDDEN        => 0,
-		   SMRY_DESC     => 'Sequence map output file.',
-		   FORMAT_DESC   => << 'END_FORMAT'
+  addOutfileOption(GETOPTKEY   => 'p|map-outfile=s',
+		   REQUIRED    => 0,
+		   PRIMARY     => 1,
+		   HIDDEN      => 0,
+		   SMRY_DESC   => 'Sequence map output file.',
+		   DETAIL_DESC => 'Sequence map output file.',
+		   FORMAT_DESC => << 'END_FORMAT'
 
 Coded fasta file/map.  The purpose of this map is to convey which partner sequence a section of sequence is based on (using the alignments).  The sequences are mixed to try to include stretches of identity from multiple pairwise alignments.  Each sequence ID is assigned an arbitrary single letter code (only 26 sequences supported).  A legend with the character codes and which sequences they represent is printed at the top of the file as a comment.  There will be 1 fasta record for each sequence, consisting of the coded characters from the legend.  The character code at each position of the sequence indicates which sequence the nucleotide in the output sequence file (see --outfile) is based on.  The capitalization of the coded characters indicate whether the sequence in that position came directly from the pairwise alignment with the sequence represented by the coded character or whether the sequence was recoded to best match a version of the sequence indicated by the coded character.  In other words, a lower case coded character means that the sequence which with this portion was aligned was optimized with a third sequence.
 
@@ -178,6 +181,18 @@ END_FORMAT
 		   PAIR_WITH     => $seq_file_type,
 		   PAIR_RELAT    => 'ONETOMANY'
 		  );
+
+my $report_out_type =
+  addOutfileOption(GETOPTKEY     => 'r|report-outfile=s',
+		   REQUIRED      => 0,
+		   PRIMARY       => 1,
+		   HIDDEN        => 0,
+		   SMRY_DESC     => 'Report output file.',
+		   DETAIL_DESC   => 'Report output file.',
+		   FORMAT_DESC   => 'Free text file.',
+		   COLLISIONMODE => 'merge',
+		   PAIR_WITH     => $seq_file_type,
+		   PAIR_RELAT    => 'ONETOMANY');
 
 my $no_usage = 0;
 addOption(GETOPTKEY   => 'n|ignore-codon-usage!',
@@ -214,7 +229,7 @@ addOption(GETOPTKEY   => 'm|method=s',
 	  ACCEPTS     => $weighting_methods);
 
 #This is only here to not show the default added suffix option
-addOutfileSuffixOption(GETOPTKEY     => 'o=s',
+addOutfileSuffixOption(GETOPTKEY     => 'u=s',
 		       REQUIRED      => 0,
 		       HIDDEN        => 1,
 		       FILETYPEID    => $seq_file_type);
@@ -268,6 +283,7 @@ while(nextFileCombo())
     my $alnFile        = getInfile($seq_file_type);
     my $ntOutFile      = getOutfile($seq_out_type);
     my $mapOutFile     = getOutfile($map_out_type);
+    my $reportOutFile  = getOutfile($report_out_type);
 
     #Read in this usage file if we haven't already
     if(defined($codonUsageFile) &&
@@ -295,6 +311,7 @@ while(nextFileCombo())
 	$input_data_hash->{$ntOutFile}->{MTXHASH} =
 	  $matrix_data_hash->{$codonUsageFile};
 	$input_data_hash->{$ntOutFile}->{MAPFILE} = $mapOutFile;
+	$input_data_hash->{$ntOutFile}->{RPTFILE} = $reportOutFile;
       }
 
     loadAlignment($alnFile,
@@ -337,7 +354,7 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
     debug("Raw unreduced solution with unmerged overlapping identity segments",
 	  ":\n",solutionToString($solution),"\n");
 
-    my $soln_stats =
+    my($soln_stats,$validation) =
       outputHybrids(generateHybrids($solution,
 				    $input_data_hash->{$outfile}->{DATA},
 				    $input_data_hash->{$outfile}->{CDNHASH},
@@ -346,11 +363,13 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
 		    $outfile,
 		    $input_data_hash->{$outfile}->{MAPFILE});
 
-    outputStats($solution,
-		$input_data_hash->{$outfile}->{DATA},
-	        $max_size,
-	        $soln_stats,
-	        $stretch_mins);
+    outputReport($solution,
+		 $input_data_hash->{$outfile}->{DATA},
+		 $max_size,
+		 $soln_stats,
+		 $stretch_mins,
+		 $validation,
+		 $input_data_hash->{$outfile}->{RPTFILE});
   }
 
 
@@ -2192,10 +2211,10 @@ sub generateHybrids
 
     verbose("Building solution sequences...");
 
-    my($woven_seqs,$source_seqs) =
+    my($woven_seqs,$source_seqs,$validation_message) =
       weaveSeqs($map,$data,$partners_hash,$matrix,$usage,$soln);
 
-    return([$woven_seqs,$source_seqs,$soln_stats]);
+    return([$woven_seqs,$source_seqs,$soln_stats,$validation_message]);
   }
 
 #Merges overlapping segments derived from the same pair by extending a single
@@ -5012,6 +5031,8 @@ sub weaveSeqs
     if(isVerbose())
       {print STDERR "\n"}
 
+    my $validation_output = "Result validation:\n";
+
     #Edit the sequences to add the alternate codons (and while we're at it,
     #we'll error-check that the sequences were created, the correct length,
     #encode the same AA sequence, and contain the included identity segments)
@@ -5054,7 +5075,8 @@ sub weaveSeqs
 	  }
 
 	#Check that all the identity segments in the solution were included
-	my $bad_nts = validateRepairSegments($seqid,$soln,$seqhash,$data);
+	my($bad_nts,$bad_segs) =
+	  validateRepairSegments($seqid,$soln,$seqhash,$data);
 
 	#Check that the sequences encode the same AA sequence
 	my $any_orig_aa = uc(translate($any_orig_seq,     $codon_hash->{REV}));
@@ -5071,26 +5093,26 @@ sub weaveSeqs
 		   "were [$bad_nts] nucleotides that were not as expected, ",
 		   "and replaced to preserve the integrity of the identity ",
 		   "segments.")}
-	if(isVerbose())
-	  {
-	    my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
-	    verbose("[$seqid] AA sequence: ",($any_orig_aa eq $mixed_aa ?
-					      '' : 'NOT '),
-		    "Validated",($any_orig_aa eq $mixed_aa ? '^' : ''),
-		    ".  Identity segment inclusion: ",($bad_nts ? 'NOT ' : ''),
-		    "Validated",
-		    ($bad_nts ? " (but [$bad_nts] nts in identity segments " .
-		     "were repaired.)" : '#'),
-		    "  [$n/",length($any_orig_seq),"] nts changed*.");
-	  }
+
+	my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
+	$validation_output .=
+	  join('',("[$seqid] AA sequence: ",($any_orig_aa eq $mixed_aa ?
+					     '' : 'NOT '),
+		   "Validated",($any_orig_aa eq $mixed_aa ? '^' : ''),
+		   ".  Identity segment inclusion: ",
+		   ($bad_nts ? 'Repaired/' : ''),"Validated#",
+		   ($bad_nts ? " ([$bad_nts] nts among [$bad_segs] identity " .
+		    "segments repaired.)" : ''),
+		   "  [$n/",length($any_orig_seq),"] nts changed*.\n"));
       }
 
-    verbose("^ = Confirmed to encode the same amino acid sequence compared ",
-	    "to 1 arbitrarily selected alignment.\n* = As compared to 1 ",
-	    "arbitrarily selected alignment.\n# = All included identity ",
-	    "segments in the solution are confirmed to be present and ",
-	    "correctly encoded from their respective pairwise source ",
-	    "alignments.");
+    $validation_output .=
+      join('',("^ = Confirmed to encode the same amino acid sequence ",
+	       "compared to 1 arbitrarily selected alignment.\n* = As ",
+	       "compared to 1 arbitrarily selected alignment.\n# = All ",
+	       "included identity segments in the solution are confirmed to ",
+	       "be present and correctly encoded from their respective ",
+	       "pairwise source alignments.\n"));
 
     #Now let's make the identity segments capitalized (using the solution
     #because there are known issues currently with the correctness of the map)
@@ -5122,7 +5144,7 @@ sub weaveSeqs
 	  }
       }
 
-    return($seqhash,$sourceseqs);
+    return($seqhash,$sourceseqs,$validation_output);
   }
 
 sub validateRepairSegments
@@ -5132,7 +5154,8 @@ sub validateRepairSegments
     my $seqhash = $_[2];
     my $data    = $_[3];
 
-    my $bad_cnt = 0;
+    my $bad_nts  = 0;
+    my $bad_segs = 0;
 
     foreach my $solrec (@{$soln->{$seqid}})
       {
@@ -5181,39 +5204,51 @@ sub validateRepairSegments
 	      {
 		debug("Unexpected identity segment sequence at: [$seqid:",
 		      ($idstart+$pos),"].");
-		$bad_cnt++;
+		$bad_nts++;
 		$new_bad = 1;
 	      }
 	  }
 
 	#Repair problems
 	if($new_bad)
-	  {substr($seqhash->{$seqid},$idstart - 1,$idlen,$expected_nts)}
+	  {
+	    $bad_segs++;
+	    substr($seqhash->{$seqid},$idstart - 1,$idlen,$expected_nts);
+	  }
       }
 
-    return($bad_cnt);
+    return($bad_nts,$bad_segs);
   }
 
-sub outputStats
+sub outputReport
   {
-    my $soln       = $_[0];
-    my $data       = $_[1];
-    my $max_size   = $_[2];
-    my $soln_stats = $_[3];
-    my $sizes      = $_[4];
+    my $soln        = $_[0];
+    my $data        = $_[1];
+    my $max_size    = $_[2];
+    my $soln_stats  = $_[3];
+    my $sizes       = $_[4];
+    my $valid_msg   = $_[5];
+    my $report_file = $_[6];
+
+    openOut(*RPT,$report_file);
 
     my $score = scoreSolution($soln,$data,$max_size);
 
     outputSolutionScore($score);
 
     outputSegmentTable($soln_stats,$sizes);
+
+    outputValidation($valid_msg);
+
+    closeOut(*RPT);
   }
 
 sub outputSolutionScore
   {
     my $score = $_[0];
 
-    print("$score->[0]\tMax number of size [$max_size] segments included ",
+    print("\nSolution Score:\n",
+	  "$score->[0]\tMax number of size [$max_size] segments included ",
 	  "from the alignment with the fewest contributed segments of that ",
 	  "size\n$score->[1]\tTotal number of unique segments of size ",
 	  "[$max_size] per sequence included\n$score->[2]\tSegment spacing ",
@@ -5255,6 +5290,9 @@ sub outputSegmentTable
 	print("\n");
       }
   }
+
+sub outputValidation
+  {print($_[0])}
 
 sub numDiff
   {
@@ -5683,6 +5721,7 @@ sub outputHybrids
     my $seq_hash    = $_[0]->[0];
     my $source_hash = $_[0]->[1];
     my $soln_stats  = $_[0]->[2];
+    my $valid_msg   = $_[0]->[3];
     my $outfile     = $_[1];
     my $mapfile     = $_[2];
 
@@ -5714,7 +5753,7 @@ sub outputHybrids
 	closeOut(*MAP);
       }
 
-    return($soln_stats);
+    return($soln_stats,$valid_msg);
   }
 
 #This creates a hash containing references to the hash with the codon keys
