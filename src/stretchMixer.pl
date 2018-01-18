@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.013';
+our $VERSION = '1.014';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -5092,17 +5092,19 @@ sub weaveSeqs
 	    "correctly encoded from their respective pairwise source ",
 	    "alignments.");
 
-    #Now let's make captial letters represent
-    foreach my $seqid (sort {$a cmp $b} keys(%$map))
+    #Now let's make the identity segments capitalized (using the solution
+    #because there are known issues currently with the correctness of the map)
+    foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
 	$seqhash->{$seqid} = lc($seqhash->{$seqid});
-	foreach my $divider (sort {$a <=> $b} keys(%{$map->{$seqid}}))
+	foreach my $rec (@{$soln->{$seqid}})
 	  {
 	    #Next if this segment doesn't containg any identity
-	    next if($map->{$seqid}->{$divider}->{IDEN_START} == 0);
+	    next if($rec->{IDEN_START} == 0 ||
+		    $rec->{IDEN_STOP} < $rec->{IDEN_START});
 
-	    my $iden_start = $map->{$seqid}->{$divider}->{IDEN_START};
-	    my $iden_stop  = $map->{$seqid}->{$divider}->{IDEN_STOP};
+	    my $iden_start = $rec->{IDEN_START};
+	    my $iden_stop  = $rec->{IDEN_STOP};
 
 	    my $tmp_seq = '';
 	    if($iden_start > 1)
@@ -5112,6 +5114,7 @@ sub weaveSeqs
 				  ($iden_stop - $iden_start + 1)));
 	    if($iden_stop < length($seqhash->{$seqid}))
 	      {$tmp_seq .= substr($seqhash->{$seqid},$iden_stop)}
+	    #Sanity check
 	    if(uc($seqhash->{$seqid}) ne uc($tmp_seq))
 	      {error("Identity-capitalized string construction problem.  ",
 		     "Sequence changed.")}
