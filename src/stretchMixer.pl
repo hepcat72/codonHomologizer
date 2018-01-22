@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.017';
+our $VERSION = '1.018';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -351,6 +351,8 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
     #Keep the last verboseOverMe message on the screen by printing a "\n"
     print STDERR ("\n");
 
+    my $score = scoreSolution($solution);
+
     debug("Raw unreduced solution with unmerged overlapping identity segments",
 	  ":\n",solutionToString($solution),"\n");
 
@@ -363,7 +365,7 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
 		    $outfile,
 		    $input_data_hash->{$outfile}->{MAPFILE});
 
-    outputReport($solution,
+    outputReport($score,
 		 $input_data_hash->{$outfile}->{DATA},
 		 $max_size,
 		 $soln_stats,
@@ -5327,7 +5329,7 @@ sub validateRepairSegments
 
 sub outputReport
   {
-    my $soln        = $_[0];
+    my $score       = $_[0];
     my $data        = $_[1];
     my $max_size    = $_[2];
     my $soln_stats  = $_[3];
@@ -5336,8 +5338,6 @@ sub outputReport
     my $report_file = $_[6];
 
     openOut(*RPT,$report_file);
-
-    my $score = scoreSolution($soln,$data,$max_size);
 
     outputSolutionScore($score);
 
