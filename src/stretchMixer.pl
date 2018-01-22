@@ -351,7 +351,9 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
     #Keep the last verboseOverMe message on the screen by printing a "\n"
     print STDERR ("\n");
 
-    my $score = scoreSolution($solution);
+    my $score = scoreSolution($solution,
+			      $input_data_hash->{$outfile}->{DATA},
+			      $max_size);
 
     debug("Raw unreduced solution with unmerged overlapping identity segments",
 	  ":\n",solutionToString($solution),"\n");
@@ -2346,10 +2348,15 @@ sub getSolutionStats
 
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
+	#Smaller stretch sizes can merge when included to represent a
+	#duplicate segment record as the larger ones.
+	my $seen = {};
+
 	foreach my $rec (grep {$_->{TYPE} eq 'seg'} @{$soln->{$seqid}})
 	  {
 	    my $pair_id = $rec->{PAIR_ID};
-	    my($seqid1,$seqid2) = keys(%{$data->{$pair_id}->{SEQS}});
+	    my($seqid1,$seqid2) =
+	      sort {$a cmp $b} keys(%{$data->{$pair_id}->{SEQS}});
 
 	    #We will cycle through all the seqids in the loop above and set the
 	    #reciprocal values by making sure that seqid1 is always the seqid
@@ -2367,10 +2374,14 @@ sub getSolutionStats
 		my $min2 = $i == $#{$sizes} ? 0 : $sizes->[$i + 1];
 		my $size = $rec->{IDEN_STOP} - $rec->{IDEN_START} + 1;
 
-		if($size >= $min1 && ($i == $#{$sizes} || $size < $min2))
+		if(!exists($seen
+			   ->{"$seqid:$rec->{IDEN_START}-$rec->{IDEN_STOP}"})
+		   && $size >= $min1 && ($i == $#{$sizes} || $size < $min2))
 		  {
 		    my $times = int($size / $min1);
 		    $stats->{$seqid1}->{$seqid2}->{$min1} += $times;
+
+		    $seen->{"$seqid:$rec->{IDEN_START}-$rec->{IDEN_STOP}"} = 0;
 		  }
 	      }
 	  }
