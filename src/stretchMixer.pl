@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.016';
+our $VERSION = '1.017';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -507,7 +507,9 @@ sub getMaxWeavedSegments
 		    if($counts->[$curpair]->[$curregion] >= $num_segs)
 		      {
 			#While the first region index (with segments yet to be
-			#evaluated) is less than the number of regions and the segment index we are on for that pair/region is larger than the last segment index for that region
+			#evaluated) is less than the number of regions and the
+			#segment index we are on for that pair/region is larger
+			#than the last segment index for that region
 			while($region_first->[$curpair] < $num_regions &&
 			      $counts->[$curpair]
 			      ->[$region_first->[$curpair]] >
@@ -906,7 +908,6 @@ sub addToSolution
     my $spacing_score1     = $_[14];
     my $spacing_score2     = $_[15];
     my $codon_hash         = $_[16];
-debug("Adding $seqid1:$first_codon_start1 and $seqid2:$first_codon_start2");
 
     my $fit_data1 = segmentFits($soln,
 				$seqid1,
@@ -1121,7 +1122,6 @@ sub reCodeMerge
 			      ($_ ne $new_codon || $_ ne $cur_codon) :
 			      ($_ ne $new_codon && $_ ne $cur_codon)}
 		      keys(%$new_codon_hash)];
-debug("Inspecting codons: [@$alternates] as alternatives to [$new_codon] and/or [$cur_codon].");
 
     my $choices = [];
     foreach my $alt (@$alternates)
@@ -1415,7 +1415,6 @@ sub getOverlapSegList
       }
 
     $i = $mini;
-debug("Starting the first overlap search with [$seqid:$soln->{$seqid}->[$i]->{FIRST_CODON_START}].");
 
     #Now $i is where we will start.  We will move right through the previously
     #added segments until the start + max size is greater than the stop
@@ -1431,7 +1430,7 @@ debug("Starting the first overlap search with [$seqid:$soln->{$seqid}->[$i]->{FI
 	$i++;
       }
 	while($i <= $#{$soln->{$seqid}} &&
-	      $soln->{$seqid}->[$i]->{FIRST_CODON_START} < $stop);
+	      $soln->{$seqid}->[$i]->{FIRST_CODON_START} <= $stop);
 
     return(wantarray ? @$list : $list);
   }
@@ -1463,7 +1462,11 @@ sub segmentFits
 				    $first_codon_start,
 				    $last_codon_stop,
 				    $max_size);
-debug("Checking overlapping $seqid record starts: [",join(',',map {$_->{FIRST_CODON_START}} @$seqlist),"] out of [",(exists($soln->{$seqid}) ? scalar(@{$soln->{$seqid}}) : '0'),"] records to see if [$seqid:$first_codon_start] fits");
+
+    debug("Checking overlapping $seqid record starts: [",
+	  join(',',map {$_->{FIRST_CODON_START}} @$seqlist),"] out of [",
+	  (exists($soln->{$seqid}) ? scalar(@{$soln->{$seqid}}) : '0'),
+	  "] records to see if [$seqid:$first_codon_start] fits");
 
     foreach my $rec (@$seqlist)
       {
@@ -1716,7 +1719,10 @@ debug("Checking overlapping $seqid record starts: [",join(',',map {$_->{FIRST_CO
 				  $left_codon_new, $fixed_poses_new,
 				  $right_codon_cur,$fixed_poses_cur,
 				  1);
-debug("Alternate codon selected 1: [",(defined($tmp_codon) ? $tmp_codon : 'undef'),"] for position [$seqid:$first_codon_start].");
+
+		    debug("Alternate codon selected 1: [",
+			  (defined($tmp_codon) ? $tmp_codon : 'undef'),
+			  "] for position [$seqid:$first_codon_start].");
 
 		    #If we couldn't select an alternative codon that
 		    #satisfies both sequences
@@ -1793,7 +1799,10 @@ debug("Alternate codon selected 1: [",(defined($tmp_codon) ? $tmp_codon : 'undef
 				  $right_codon_new,$fixed_poses_new,
 				  $left_codon_cur, $fixed_poses_cur,
 				  1);
-debug("Alternate codon selected 2: [",(defined($tmp_codon) ? $tmp_codon : 'undef'),"] for position [$seqid:$first_codon_start].");
+
+		    debug("Alternate codon selected 2: [",
+			  (defined($tmp_codon) ? $tmp_codon : 'undef'),
+			  "] for position [$seqid:$first_codon_start].");
 
 		    #If we couldn't select an alternative codon that
 		    #satisfies both sequences
@@ -2148,8 +2157,8 @@ foreach my $s1 (keys(%$stats))
 	 {$ttot += $stats->{$s1}->{$s2}->{$max_size}}
        if(!defined($tmin) || defined($stats->{$s1}->{$s2}->{$max_size}) && $stats->{$s1}->{$s2}->{$max_size} != 0 && $stats->{$s1}->{$s2}->{$max_size} < $tmin)
 	{$tmin = $stats->{$s1}->{$s2}->{$max_size}}}}
-#$lowest_inclusion_score = $tmin;
-#$total_inclusion_score = $ttot / 2;
+$lowest_inclusion_score = $tmin;
+$total_inclusion_score = $ttot / 2;
 
     ## Normalize the spacing score by the number of total regions in all pairs/
     ## sequences
@@ -2748,13 +2757,6 @@ sub splitSegment
 		   $stop + 1,
 		   $saved_final_stop,
 		   undef);               #Don't replicate the spacing score
-
-if($start - 1 == 682)
-  {verbose("TEST1")}
-elsif($stop == 682)
-  {verbose("TEST2")}
-elsif($saved_iden_stop == 682)
-  {verbose("TEST3")}
       }
     #Else if the start overlaps anything but the start and the stop overlaps
     #anything but the stop and the segment is 2 codons in size
@@ -2785,10 +2787,6 @@ elsif($saved_iden_stop == 682)
 		   $stop + 1,
 		   $saved_final_stop,
 		   undef);               #Don't replicate the spacing score
-if($start - 1 == 682)
-  {verbose("TEST4")}
-elsif($saved_iden_stop == 682)
-  {verbose("TEST5")}
       }
     #Elsif the start overlaps anything but the start
     elsif($start > $rec->{FINAL_START} && $start <= $rec->{FINAL_STOP})
@@ -2815,10 +2813,6 @@ elsif($saved_iden_stop == 682)
 		   $start,
 		   $saved_final_stop,
 		   undef);               #Don't replicate the spacing score
-if($start - 1 == 682)
-  {verbose("TEST6")}
-elsif($saved_iden_stop == 682)
-  {verbose("TEST7 REC $rec->{PAIR_ID} NEW IDEN_START: $start IDEN_STOP: $saved_iden_stop REC ORIG FINAL START: $rec->{FINAL_START}")}
       }
     #Elsif the stop overlaps anything but the stop
     elsif($stop >= $rec->{FINAL_START} && $stop < $rec->{FINAL_STOP})
@@ -2845,10 +2839,6 @@ elsif($saved_iden_stop == 682)
 		   $saved_final_start,
 		   $stop,
 		   undef);               #Don't replicate the spacing score
-if($stop + 1 == 685)
-  {verbose("TEST8 Adding IDEN_START $saved_iden_start IDEN_STOP $stop FIRST CODON START $saved_final_start LAST CODON STOP $stop TYPE $rec->{TYPE} PAIR $rec->{PAIR_ID}")}
-elsif($saved_iden_start == 685)
-  {verbose("TEST9")}
       }
     else
       {error("Unexpected case.  No overlap was found for splitting the ",
@@ -4062,7 +4052,7 @@ sub getClosestRightDivider
 					   $partner->[0],  #pair ID
 					   $partner->[1],  #partner seq ID
 					   $data);
-debug("Partner coordinate is ",(calcFrame($partner_coord) == 1 ? '' : 'NOT '),"in frame 1 - should always be frame 1 since the query was in frame 1");
+
 	#Find the closest coord to the right
 	my($part_rght_seg_coord,$part_right_seg_pair) =
 	  getClosestRightSegCoord($partner->[1], #seqid
@@ -4070,7 +4060,7 @@ debug("Partner coordinate is ",(calcFrame($partner_coord) == 1 ? '' : 'NOT '),"i
 				  $soln,
 				  length($data->{$partner->[0]}->{SEQS}
 					 ->{$partner->[1]}));
-debug("The closest segment's start to the right returned is ",(calcFrame($part_rght_seg_coord) == 1 ? '' : 'NOT (' . calcFrame($part_rght_seg_coord) . ') '),"in frame 1 - should always be frame 1 since the query above should have been in frame 1");
+
 	#Convert the coordinate back to this sequence
 	#Note, I had originally used convertDivider here, but that causes the
 	#following problem: If the query sequence has a segment from 1-6 and a
@@ -4089,7 +4079,7 @@ debug("The closest segment's start to the right returned is ",(calcFrame($part_r
 	#closest corresponding segment.
 	if(calcFrame($orig_rght_seg_coord) == 3)
 	  {$orig_rght_seg_coord++}
-debug("The conversion back is ",(calcFrame($orig_rght_seg_coord) == 1 ? '' : 'NOT (' . calcFrame($orig_rght_seg_coord) . ') '),"in frame 1 - should always be frame 1 since the query above should have been in frame 1");
+
 	#If this coordinate is closer, save it.
 	if($orig_rght_seg_coord < $closest)
 	  {
@@ -4200,23 +4190,6 @@ debug("The conversion back is ",(calcFrame($orig_rght_seg_coord) == 1 ? '' : 'NO
 	  }
 
 	return($midpoint + 2,$closest);
-
-	#Reversed this so that finding the right divider between 2 different coords yields the same result as finding the left divider between the same coords
-#	if(($midpoint - 1) <= $coord)
-#	  {
-#	    #This should not happen, but just in case...
-#	    if(($midpoint + 2) > $closest)
-#	      {
-#		error("Bad frame boundary.  Frame 2.  Midpoint: ",
-#		      "[$midpoint].  Closest: [$closest].  Coord(/final ",
-#		      "start): [$coord].");
-#		return($coord + 1,$closest);
-#	      }
-#
-#	    return($midpoint + 2,$closest);
-#	  }
-#
-#	return($midpoint - 1,$closest);
       }
     elsif($frame_pos == 3)
       {
@@ -4370,7 +4343,7 @@ sub copyDivider
 
 		$div_map->{$partner_seqid}->{$partner_divider} =
 		  {PAIR_ID    => $partner_pair_id,
-		   TYPE       => undef,#($side eq 'left' ? 'RECODE' : undef),
+		   TYPE       => undef,
 		   STOP       => undef,
 		   IDEN_START => 0,
 		   IDEN_STOP  => 0,
@@ -4445,7 +4418,7 @@ sub copyDivider
 			$div_map->{$partner_seqid}->{$partner_divider}
 			  ->{PAIR_ID} = $partner_pair_id;
 			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;#($side eq 'left' ? 'SOURCE' : undef);
+			  ->{TYPE} = undef;
 		      }
 		  }
 		#Otherwise, copy as type recode (if existing isn't source)
@@ -4459,7 +4432,7 @@ sub copyDivider
 			$div_map->{$partner_seqid}->{$partner_divider}
 			  ->{PAIR_ID} = $partner_pair_id;
 			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;#($side eq 'left' ? 'RECODE' : undef);
+			  ->{TYPE} = undef;
 		      }
 		    #Else - leave it as it is.  We're arbitrarily using the
 		    #first copied divider and recode source
@@ -4486,7 +4459,7 @@ sub copyDivider
 			$div_map->{$partner_seqid}->{$partner_divider}
 			  ->{PAIR_ID} = $partner_pair_id;
 			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;#($side eq 'left' ? 'SOURCE' : undef);
+			  ->{TYPE} = undef;
 		      }
 		    #Else no need to copy - everything is already as it should
 		    #be
@@ -4501,7 +4474,7 @@ sub copyDivider
 			$div_map->{$partner_seqid}->{$partner_divider}
 			  ->{PAIR_ID} = $partner_pair_id;
 			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;#($side eq 'left' ? 'RECODE' : undef);
+			  ->{TYPE} = undef;
 		      }
 		    #Else no need to copy - everything is already as it should
 		    #be or we're just going with the first one that was copied
@@ -5136,8 +5109,6 @@ sub weaveSeqs
 			  "sequence string.");
 		    $sourceseqs->{SEQS}->{$seqid} .=
 		      '_' x ($stop - $start + 1);
-#		    $codecount = 27;
-#		    $sourceseqs = {}; #Clear out the hash, but keep it a hash
 		  }
 		elsif($type eq 'SOURCE')
 		  {$sourceseqs->{SEQS}->{$seqid} .=
@@ -5285,7 +5256,8 @@ sub validateRepairSegments
     foreach my $solrec (@{$soln->{$seqid}})
       {
 	my $type = $solrec->{TYPE};
-	my($expected_nts,$idlen,$idstart,$idstop);
+	my($expected_nts,$idlen,$idstart,$idstop,$start,$stop,$repair_nts,
+	   $len);
 
 	if($type eq 'seg')
 	  {
@@ -5297,6 +5269,10 @@ sub validateRepairSegments
 	    my $source_seq = $data->{$pair_id}->{SEQS}->{$seqid};
 	    $idlen         = $idstop - $idstart + 1;
 	    $expected_nts  = uc(substr($source_seq,$idstart - 1,$idlen));
+	    $start         = $solrec->{FIRST_CODON_START};
+	    $stop          = $solrec->{LAST_CODON_STOP};
+	    $len           = $stop - $start + 1;
+	    $repair_nts    = substr($source_seq,$start - 1,$len);
 	  }
 	elsif($type eq 'alt')
 	  {
@@ -5310,6 +5286,10 @@ sub validateRepairSegments
 	    $idstop       = $solrec->{FINAL_STOP};
 	    $idlen        = 3;
 	    $expected_nts = uc($solrec->{ALT_CODON});
+	    $start        = $solrec->{FINAL_START};
+	    $stop         = $solrec->{FINAL_STOP};
+	    $len          = 3;
+	    $repair_nts   = $solrec->{ALT_CODON};
 	  }
 
 	if(!defined($idstart) || !defined($idstop) || $idstop < $idstart)
@@ -5338,7 +5318,7 @@ sub validateRepairSegments
 	if($new_bad)
 	  {
 	    $bad_segs++;
-	    substr($seqhash->{$seqid},$idstart - 1,$idlen,$expected_nts);
+	    substr($seqhash->{$seqid},$start - 1,$len,$repair_nts);
 	  }
       }
 
@@ -5715,8 +5695,11 @@ sub getPartnerAlnSeqs
     $check_aln =~ s/-+//g;
     if(length($check_aln) < length($replace_seq))
       {error("The number of non-gap characters in the alignment sequence ",
-	     "[$fixed_aln]: [",length($check_aln),"] was less than the unaligned replacement ",
-	     "sequence: [$replace_seq]: [",length($replace_seq),"].  Alignment: [$pairid]  Seq:Start-stop: [$fixed_seqid:$fixed_start-$fixed_stop]  Reference/change sequence: [$change_seqid:$change_start-$change_stop]")}
+	     "[$fixed_aln]: [",length($check_aln),"] was less than the ",
+	     "unaligned replacement sequence: [$replace_seq]: [",
+	     length($replace_seq),"].  Alignment: [$pairid]  Seq:Start-stop: ",
+	     "[$fixed_seqid:$fixed_start-$fixed_stop]  Reference/change ",
+	     "sequence: [$change_seqid:$change_start-$change_stop]")}
 
     #Replace the sequence in the fixed aligned string with what we got from the
     #map
