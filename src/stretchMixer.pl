@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.015';
+our $VERSION = '1.016';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -906,6 +906,7 @@ sub addToSolution
     my $spacing_score1     = $_[14];
     my $spacing_score2     = $_[15];
     my $codon_hash         = $_[16];
+debug("Adding $seqid1:$first_codon_start1 and $seqid2:$first_codon_start2");
 
     my $fit_data1 = segmentFits($soln,
 				$seqid1,
@@ -1093,6 +1094,13 @@ sub reCodeMerge
     my $new_fixed_poses = $_[2];
     my $cur_codon       = uc($_[3]);
     my $cur_fixed_poses = $_[4];
+    my $opposite_ends   = defined($_[5]) ? $_[5] : 0;
+    #'opposite ends' means that the codons are edge codons of opposite sides.
+    #Knowing this alls us to select one of the 2 codons as satisfying both's
+    #identity (because one may not, e.g. GAA and GAG - If the left segment's
+    #identity ends in GAA and only the G is involved in identity, but the
+    #right's segment starts with GAG and only the second G is involved in
+    #identity, then the 2 codons are compatible and the alternate is GAG.
 
     #Do a quick error-check to make sure the codons each encode the same AA
     if(getAA($new_codon,$codon_hash) ne getAA($cur_codon,$codon_hash))
@@ -1109,8 +1117,11 @@ sub reCodeMerge
 
     #Create an array of all possible alternate codons to choose from
     my $alternates = [sort {$a cmp $b}
-		      grep {$_ ne $new_codon && $_ ne $cur_codon}
+		      grep {$opposite_ends ?
+			      ($_ ne $new_codon || $_ ne $cur_codon) :
+			      ($_ ne $new_codon && $_ ne $cur_codon)}
 		      keys(%$new_codon_hash)];
+debug("Inspecting codons: [@$alternates] as alternatives to [$new_codon] and/or [$cur_codon].");
 
     my $choices = [];
     foreach my $alt (@$alternates)
@@ -1388,11 +1399,14 @@ sub getOverlapSegList
     while(($maxi - $mini) > 0)
       {
 	#If $i's segment starts to the left of the stop coordinate, move the
-	#left bound right
-	if($stop <= $soln->{$seqid}->[$i]->{FIRST_CODON_START})
+	#right bound left
+	if($soln->{$seqid}->[$i]->{FIRST_CODON_START} > $stop)
 	  {$maxi = $i}
-	else
+	elsif(($soln->{$seqid}->[$i]->{FIRST_CODON_START} + $max_size - 1) <
+	      $start)
 	  {$mini = $i}
+	else
+	  {last}
 
 	$i = int(($maxi - $mini) / 2) + $mini;
 
@@ -1401,6 +1415,7 @@ sub getOverlapSegList
       }
 
     $i = $mini;
+debug("Starting the first overlap search with [$seqid:$soln->{$seqid}->[$i]->{FIRST_CODON_START}].");
 
     #Now $i is where we will start.  We will move right through the previously
     #added segments until the start + max size is greater than the stop
@@ -1416,8 +1431,7 @@ sub getOverlapSegList
 	$i++;
       }
 	while($i <= $#{$soln->{$seqid}} &&
-	      $stop <=
-	      ($soln->{$seqid}->[$i]->{FIRST_CODON_START} + $max_size - 1));
+	      $soln->{$seqid}->[$i]->{FIRST_CODON_START} < $stop);
 
     return(wantarray ? @$list : $list);
   }
@@ -1449,467 +1463,471 @@ sub segmentFits
 				    $first_codon_start,
 				    $last_codon_stop,
 				    $max_size);
+debug("Checking overlapping $seqid record starts: [",join(',',map {$_->{FIRST_CODON_START}} @$seqlist),"] out of [",(exists($soln->{$seqid}) ? scalar(@{$soln->{$seqid}}) : '0'),"] records to see if [$seqid:$first_codon_start] fits");
 
     foreach my $rec (@$seqlist)
       {
-	if($rec->{PAIR_ID} ne $pairid)
+	next if($rec->{PAIR_ID} eq $pairid);
+
+	if($rec->{TYPE} eq 'seg')
 	  {
-	    if($rec->{TYPE} eq 'seg')
+	    my $common_iden_start = 0;
+	    if($iden_start >= $rec->{IDEN_START} &&
+	       $iden_start <= $rec->{IDEN_STOP})
+	      {$common_iden_start = $iden_start}
+	    elsif(($iden_stop >= $rec->{IDEN_START} &&
+		   $iden_stop <= $rec->{IDEN_STOP}) ||
+		  ($iden_start < $rec->{IDEN_START} &&
+		   $iden_stop  > $rec->{IDEN_STOP}))
+	      {$common_iden_start = $rec->{IDEN_START}}
+
+	    my $common_iden_stop  = 0;
+	    if($iden_stop >= $rec->{IDEN_START} &&
+	       $iden_stop <= $rec->{IDEN_STOP})
+	      {$common_iden_stop = $iden_stop}
+	    elsif(($iden_start >= $rec->{IDEN_START} &&
+		   $iden_start <= $rec->{IDEN_STOP}) ||
+		  ($iden_start < $rec->{IDEN_START} &&
+		   $iden_stop  > $rec->{IDEN_STOP}))
+	      {$common_iden_stop = $rec->{IDEN_STOP}}
+
+	    #If the identities overlap, the sequence from each pair must be
+	    #identical
+	    if($common_iden_start > 0 && $common_iden_stop > 0)
 	      {
-		my $common_iden_start = 0;
-		if($iden_start >= $rec->{IDEN_START} &&
-		   $iden_start <= $rec->{IDEN_STOP})
-		  {$common_iden_start = $iden_start}
-		elsif(($iden_stop >= $rec->{IDEN_START} &&
-		       $iden_stop <= $rec->{IDEN_STOP}) ||
-		      ($iden_start < $rec->{IDEN_START} &&
-		       $iden_stop  > $rec->{IDEN_STOP}))
-		  {$common_iden_start = $rec->{IDEN_START}}
+		#Obtain each sequence segment
+		my $subseq1 =
+		  substr($hash->{$pairid}->{SEQS}->{$seqid},
+			 $common_iden_start - 1,
+			 $common_iden_stop - $common_iden_start + 1);
 
-		my $common_iden_stop  = 0;
-		if($iden_stop >= $rec->{IDEN_START} &&
-		   $iden_stop <= $rec->{IDEN_STOP})
-		  {$common_iden_stop = $iden_stop}
-		elsif(($iden_start >= $rec->{IDEN_START} &&
-		       $iden_start <= $rec->{IDEN_STOP}) ||
-		      ($iden_start < $rec->{IDEN_START} &&
-		       $iden_stop  > $rec->{IDEN_STOP}))
-		  {$common_iden_stop = $rec->{IDEN_STOP}}
+		my $subseq2 =
+		  substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
+			 $common_iden_start - 1,
+			 $common_iden_stop - $common_iden_start + 1);
 
-		#If the identities overlap, the sequence from each pair must be
-		#identical
-		if($common_iden_start > 0 && $common_iden_stop > 0)
+		if($subseq1 ne $subseq2)
+		  {return(undef)}
+	      }
+
+	    #Things we do not care about: 1. no overlap at all.  2. overlap
+	    #of an edge codon with an identity region.  As long as
+	    #overlapping identity regions match and we're comparing the
+	    #sequences composed of just different codons that each encode
+	    #the same AA sequence.  All we have to do is use sequence from
+	    #one pair or another in whole codon increments
+
+	    #If both left codons are not 100% covered by the identity
+	    #region and they overlap (assuming the identity is at least 3
+	    #bases long) and their identities do not start in the same
+	    #place.  We're not going to worry about whether these records
+	    #have alternate codons that were previously selected because
+	    #either the same conclusion will be reached and the overlapping
+	    #alternate codon record will agree and it'll be added or it
+	    #won't.
+	    if(#both left codons are not 100% covered by the identity reg
+	       $iden_start != $first_codon_start &&
+	       $rec->{IDEN_START} != $rec->{FIRST_CODON_START} &&
+
+	       #the codons overlap (i.e. are in the same [frame] location)
+	       $first_codon_start == $rec->{FIRST_CODON_START} &&
+
+	       #their identities do not stop in the same place
+	       $rec->{IDEN_START} != $iden_start)
+	      {
+		#The codon in the sequence being added
+		my $left_codon_new =
+		  substr($hash->{$pairid}->{SEQS}->{$seqid},
+			 $first_codon_start - 1,
+			 3);
+		#The codon in the sequence that was already added
+		my $left_codon_cur =
+		  substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
+			 $rec->{FIRST_CODON_START} - 1,
+			 3);
+
+		if($left_codon_new ne $left_codon_cur)
 		  {
-		    #Obtain each sequence segment
+		    #The relative positions in the codon being added that
+		    #must stay the same
+		    my $fixed_poses_new =
+		      [$iden_start..($first_codon_start + 2)];
+
+		    #The relative positions in the codon already added that
+		    #must stay the same
+		    my $fixed_poses_cur =
+		      [$rec->{IDEN_START}..
+		       ($rec->{FIRST_CODON_START} + 2)];
+
+		    my $tmp_codon =
+		      reCodeMerge($codon_hash,
+				  $left_codon_new,$fixed_poses_new,
+				  $left_codon_cur,$fixed_poses_cur);
+
+		    #If we couldn't select an alternative codon that
+		    #satisfies both sequences
+		    if(!defined($tmp_codon) || $tmp_codon eq '')
+		      {
+			if(!defined($tmp_codon))
+			  {error("Could not recode codons for sequence ",
+				 "[$seqid] at (sequence-relative, i.e. ",
+				 "not alignment) positions: ",
+				 "[$first_codon_start,",
+				 "$rec->{FIRST_CODON_START}] (which ",
+				 "should be the same position) in ",
+				 "alignments [$pairid,$rec->{PAIR_ID}].")}
+			return(undef);
+		      }
+		    #Else if an alternative codon was already selected to
+		    #match another segment and it differs from what we got
+		    #here
+		    elsif(defined($alt_left_cdn) &&
+			  $alt_left_cdn ne $tmp_codon)
+		      {return(undef)}
+		    #Else if this is a new alternate codon
+		    elsif(!defined($alt_left_cdn))
+		      {$alt_left_cdn = $tmp_codon}
+		  }
+	      }
+
+	    #If both right codons are not 100% covered by the identity
+	    #region and they overlap (assuming the identity is at least 3
+	    #bases long) and their identities do not stop in the same place
+	    #We're not going to worry about whether these records have
+	    #alternate codons that were previously selected because either
+	    #the same conclusion will be reached and the overlapping
+	    #alternate codon record will agree and it'll be added or it
+	    #won't.
+	    if(#both right codons are not 100% covered by the identity reg
+	       $iden_stop != $last_codon_stop &&
+	       $rec->{IDEN_STOP} != $rec->{LAST_CODON_STOP} &&
+
+	       #the codons overlap (i.e. are in the same [frame] location)
+	       $last_codon_stop == $rec->{LAST_CODON_STOP} &&
+
+	       #their identities do not stop in the same place
+	       $rec->{IDEN_STOP} != $iden_stop)
+	      {
+		#The codon in the sequence being added
+		my $right_codon_new =
+		  substr($hash->{$pairid}->{SEQS}->{$seqid},
+			 #-2 to get the first base in the codon and -1 so
+			 #the coordinate system starts with 0
+			 $last_codon_stop - 2 - 1,
+			 3);
+		#The codon in the sequence that was already added
+		my $right_codon_cur =
+		  substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
+			 #-2 to get the first base in the codon and -1 so
+			 #the coordinate system starts with 0
+			 $rec->{LAST_CODON_STOP} - 2 - 1,
+			 3);
+
+		if($right_codon_new ne $right_codon_cur)
+		  {
+		    #The relative positions in the codon being added that
+		    #must stay the same
+		    my $fixed_poses_new =
+		      [($last_codon_stop - 2)..$iden_stop];
+
+		    #The relative positions in the codon already added that
+		    #must stay the same
+		    my $fixed_poses_cur =
+		      [($rec->{LAST_CODON_STOP} - 2)..
+		       $rec->{IDEN_STOP}];
+
+		    my $tmp_codon =
+		      reCodeMerge($codon_hash,
+				  $right_codon_new,$fixed_poses_new,
+				  $right_codon_cur,$fixed_poses_cur);
+
+		    #If we couldn't select an alternative codon that
+		    #satisfies both sequences
+		    if(!defined($tmp_codon) || $tmp_codon eq '')
+		      {
+			if(!defined($tmp_codon))
+			  {error("Could not recode codons for sequence ",
+				 "[$seqid] at (sequence-relative, i.e. ",
+				 "not alignment) positions: ",
+				 "[",($last_codon_stop - 2),",",
+				 ($rec->{LAST_CODON_STOP} - 2),"] (which ",
+				 "should be the same position) in ",
+				 "alignments [$pairid,$rec->{PAIR_ID}].")}
+			return(undef);
+		      }
+		    #Else if an alternative codon was already selected to
+		    #match another segment and it differs from what we got
+		    #here
+		    elsif(defined($alt_right_cdn) &&
+			  $alt_right_cdn ne $tmp_codon)
+		      {return(undef)}
+		    #Else if this is a new alternate codon
+		    elsif(!defined($alt_right_cdn))
+		      {$alt_right_cdn = $tmp_codon}
+		  }
+	      }
+
+	    #If the left codon of the candidate segment being added and the
+	    #right codon of the current segment already in the solution are
+	    #not 100% covered by the identity region and they overlap
+	    #(assuming the identity is at least 3 bases long) and we do not
+	    #need to check if their identity boundaries are the same
+	    #because they come in from different sides
+	    #We're not going to worry about whether these records have
+	    #alternate codons that were previously selected because either
+	    #the same conclusion will be reached and the overlapping
+	    #alternate codon record will agree and it'll be added or it
+	    #won't.
+	    if(#both codons are not 100% covered by the identity regs
+	       $iden_start != $first_codon_start &&
+	       $rec->{IDEN_STOP} != $rec->{LAST_CODON_STOP} &&
+
+	       #the codons overlap (i.e. are in the same [frame] location)
+	       $first_codon_start == ($rec->{LAST_CODON_STOP} - 2))
+	      {
+		#The codon in the sequence being added
+		my $left_codon_new =
+		  substr($hash->{$pairid}->{SEQS}->{$seqid},
+			 $first_codon_start - 1,
+			 3);
+		#The codon in the sequence that was already added
+		my $right_codon_cur =
+		  substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
+			 #-2 to get the first base in the codon and -1 so
+			 #the coordinate system starts with 0
+			 $rec->{LAST_CODON_STOP} - 2 - 1,
+			 3);
+
+		if($left_codon_new ne $right_codon_cur)
+		  {
+		    #The relative positions in the codon being added that
+		    #must stay the same
+		    my $fixed_poses_new =
+		      [$iden_start..($first_codon_start + 2)];
+
+		    #The relative positions in the codon already added that
+		    #must stay the same
+		    my $fixed_poses_cur =
+		      [($rec->{LAST_CODON_STOP} - 2)..
+		       $rec->{IDEN_STOP}];
+
+		    my $tmp_codon =
+		      reCodeMerge($codon_hash,
+				  $left_codon_new, $fixed_poses_new,
+				  $right_codon_cur,$fixed_poses_cur,
+				  1);
+debug("Alternate codon selected 1: [",(defined($tmp_codon) ? $tmp_codon : 'undef'),"] for position [$seqid:$first_codon_start].");
+
+		    #If we couldn't select an alternative codon that
+		    #satisfies both sequences
+		    if(!defined($tmp_codon) || $tmp_codon eq '')
+		      {
+			if(!defined($tmp_codon))
+			  {error("Could not recode codons for sequence ",
+				 "[$seqid] at (sequence-relative, i.e. ",
+				 "not alignment) positions: ",
+				 "[$first_codon_start,",
+				 ($rec->{LAST_CODON_STOP} - 2),"] (which ",
+				 "should be the same position) in ",
+				 "alignments [$pairid,$rec->{PAIR_ID}].")}
+			return(undef);
+		      }
+		    #Else if an alternative codon was already selected to
+		    #match another segment and it differs from what we got
+		    #here
+		    elsif(defined($alt_left_cdn) &&
+			  $alt_left_cdn ne $tmp_codon)
+		      {return(undef)}
+		    #Else if this is a new alternate codon
+		    elsif(!defined($alt_left_cdn))
+		      {$alt_left_cdn = $tmp_codon}
+		  }
+	      }
+
+	    #If the right codon of the candidate segment being added and
+	    #the left codon of the current segment already in the solution
+	    #are not 100% covered by the identity region and they overlap
+	    #(assuming the identity is at least 3 bases long) and we do not
+	    #need to check if their identity boundaries are the same
+	    #because they come in from different sides
+	    #We're not going to worry about whether these records have
+	    #alternate codons that were previously selected because either
+	    #the same conclusion will be reached and the overlapping
+	    #alternate codon record will agree and it'll be added or it
+	    #won't.
+	    if(#both codons are not 100% covered by the identity regs
+	       $iden_stop != $last_codon_stop &&
+	       $rec->{IDEN_START} != $rec->{FIRST_CODON_START} &&
+
+	       #the codons overlap (i.e. are in the same [frame] location)
+	       ($last_codon_stop - 2) == $rec->{FIRST_CODON_START})
+	      {
+		#The codon in the sequence being added
+		my $right_codon_new =
+		  substr($hash->{$pairid}->{SEQS}->{$seqid},
+			 #-2 to get the first base in the codon and -1 so
+			 #the coordinate system starts with 0
+			 $last_codon_stop - 2 - 1,
+			 3);
+		#The codon in the sequence that was already added
+		my $left_codon_cur =
+		  substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
+			 $rec->{FIRST_CODON_START} - 1,
+			 3);
+
+		if($right_codon_new ne $left_codon_cur)
+		  {
+		    #The relative positions in the codon being added that
+		    #must stay the same
+		    my $fixed_poses_new =
+		      [$iden_start..($first_codon_start + 2)];
+
+		    #The relative positions in the codon already added that
+		    #must stay the same
+		    my $fixed_poses_cur =
+		      [($rec->{LAST_CODON_STOP} - 2)..
+		       $rec->{IDEN_STOP}];
+
+		    my $tmp_codon =
+		      reCodeMerge($codon_hash,
+				  $right_codon_new,$fixed_poses_new,
+				  $left_codon_cur, $fixed_poses_cur,
+				  1);
+debug("Alternate codon selected 2: [",(defined($tmp_codon) ? $tmp_codon : 'undef'),"] for position [$seqid:$first_codon_start].");
+
+		    #If we couldn't select an alternative codon that
+		    #satisfies both sequences
+		    if(!defined($tmp_codon) || $tmp_codon eq '')
+		      {
+			if(!defined($tmp_codon))
+			  {error("Could not recode codons for sequence ",
+				 "[$seqid] at (sequence-relative, i.e. ",
+				 "not alignment) positions: ",
+				 "[",($last_codon_stop - 2),",",
+				 "$rec->{FIRST_CODON_START}] (which ",
+				 "should be the same position) in ",
+				 "alignments [$pairid,$rec->{PAIR_ID}].")}
+			return(undef);
+		      }
+		    #Else if an alternative codon was already selected to
+		    #match another segment and it differs from what we got
+		    #here
+		    elsif(defined($alt_right_cdn) &&
+			  $alt_right_cdn ne $tmp_codon)
+		      {return(undef)}
+		    #Else if this is a new alternate codon
+		    elsif(!defined($alt_right_cdn))
+		      {$alt_right_cdn = $tmp_codon}
+		  }
+	      }
+
+	    #At this point, if we've gotten here, the segment can still be
+	    #added to the solution (as far as up to this number of
+	    #overlapping segments looked at thus far goes).  We will keep
+	    #looping to check the other overlaps.
+	  }
+	else
+	  {
+	    #This doesn't treat edge codons completely covered by the
+	    #identity region any differently because the distinction is
+	    #unimportant - what is done is the same test in each case
+
+	    #If the already added alternate codon overlaps the candidate's
+	    #left edge codon
+	    if($rec->{IDEN_START} == $first_codon_start)
+	      {
+		#If the candidate already has an alternate codon & differs
+		if(defined($alt_left_cdn) &&
+		   $alt_left_cdn ne $rec->{ALT_CODON})
+		  {return(undef)}
+		#If this alternate codon already exists in the solution as
+		#an alternate codon
+		elsif(defined($alt_left_cdn))
+		  {$no_left_cdn = 0}
+		else
+		  {
+		    #Make sure the identity portion of the sequence being
+		    #added is the same as the corresponding portion of the
+		    #alternate codon that was already added
+
+		    #Obtain the subseq for this segment from the identity
+		    #start to the end of the left edge codon
 		    my $subseq1 =
 		      substr($hash->{$pairid}->{SEQS}->{$seqid},
-			     $common_iden_start - 1,
-			     $common_iden_stop - $common_iden_start + 1);
+			     $iden_start - 1,
+			     #+2 to get the last codon base coord +1 to get
+			     #the size after getting the diff
+			     $first_codon_start + 2 - $iden_start + 1);
 
+		    #Obtain the subseq of the alternate codon from the
+		    #relative identity start to the end of the codon
+		    #Don't need to add 1 because start = 0 in substr()
+		    my $relstart = $first_codon_start - $iden_start;
+		    my $relsize  = 3 - $relstart;
 		    my $subseq2 =
-		      substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
-			     $common_iden_start - 1,
-			     $common_iden_stop - $common_iden_start + 1);
+		      substr($rec->{ALT_CODON},$relstart,$relsize);
 
 		    if($subseq1 ne $subseq2)
 		      {return(undef)}
 		  }
-
-		#Things we do not care about: 1. no overlap at all.  2. overlap
-		#of an edge codon with an identity region.  As long as
-		#overlapping identity regions match and we're comparing the
-		#sequences composed of just different codons that each encode
-		#the same AA sequence.  All we have to do is use sequence from
-		#one pair or another in whole codon increments
-
-		#If both left codons are not 100% covered by the identity
-		#region and they overlap (assuming the identity is at least 3
-		#bases long) and their identities do not start in the same
-		#place.  We're not going to worry about whether these records
-		#have alternate codons that were previously selected because
-		#either the same conclusion will be reached and the overlapping
-		#alternate codon record will agree and it'll be added or it
-		#won't.
-		if(#both left codons are not 100% covered by the identity reg
-		   $iden_start != $first_codon_start &&
-		   $rec->{IDEN_START} != $rec->{FIRST_CODON_START} &&
-
-		   #the codons overlap (i.e. are in the same [frame] location)
-		   $first_codon_start == $rec->{FIRST_CODON_START} &&
-
-		   #their identities do not stop in the same place
-		   $rec->{IDEN_START} != $iden_start)
-		  {
-		    #The codon in the sequence being added
-		    my $left_codon_new =
-		      substr($hash->{$pairid}->{SEQS}->{$seqid},
-			     $first_codon_start - 1,
-			     3);
-		    #The codon in the sequence that was already added
-		    my $left_codon_cur =
-		      substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
-			     $rec->{FIRST_CODON_START} - 1,
-			     3);
-
-		    if($left_codon_new ne $left_codon_cur)
-		      {
-			#The relative positions in the codon being added that
-			#must stay the same
-			my $fixed_poses_new =
-			  [$iden_start..($first_codon_start + 2)];
-
-			#The relative positions in the codon already added that
-			#must stay the same
-			my $fixed_poses_cur =
-			  [$rec->{IDEN_START}..
-			   ($rec->{FIRST_CODON_START} + 2)];
-
-			my $tmp_codon =
-			  reCodeMerge($codon_hash,
-				      $left_codon_new,$fixed_poses_new,
-				      $left_codon_cur,$fixed_poses_cur);
-
-			#If we couldn't select an alternative codon that
-			#satisfies both sequences
-			if(!defined($tmp_codon) || $tmp_codon eq '')
-			  {
-			    if(!defined($tmp_codon))
-			      {error("Could not recode codons for sequence ",
-				     "[$seqid] at (sequence-relative, i.e. ",
-				     "not alignment) positions: ",
-				     "[$first_codon_start,",
-				     "$rec->{FIRST_CODON_START}] (which ",
-				     "should be the same position) in ",
-				     "alignments [$pairid,$rec->{PAIR_ID}].")}
-			    return(undef);
-			  }
-			#Else if an alternative codon was already selected to
-			#match another segment and it differs from what we got
-			#here
-			elsif(defined($alt_left_cdn) &&
-			      $alt_left_cdn ne $tmp_codon)
-			  {return(undef)}
-			#Else if this is a new alternate codon
-			elsif(!defined($alt_left_cdn))
-			  {$alt_left_cdn = $tmp_codon}
-		      }
-		  }
-
-		#If both right codons are not 100% covered by the identity
-		#region and they overlap (assuming the identity is at least 3
-		#bases long) and their identities do not stop in the same place
-		#We're not going to worry about whether these records have
-		#alternate codons that were previously selected because either
-		#the same conclusion will be reached and the overlapping
-		#alternate codon record will agree and it'll be added or it
-		#won't.
-		if(#both right codons are not 100% covered by the identity reg
-		   $iden_stop != $last_codon_stop &&
-		   $rec->{IDEN_STOP} != $rec->{LAST_CODON_STOP} &&
-
-		   #the codons overlap (i.e. are in the same [frame] location)
-		   $last_codon_stop == $rec->{LAST_CODON_STOP} &&
-
-		   #their identities do not stop in the same place
-		   $rec->{IDEN_STOP} != $iden_stop)
-		  {
-		    #The codon in the sequence being added
-		    my $right_codon_new =
-		      substr($hash->{$pairid}->{SEQS}->{$seqid},
-			     #-2 to get the first base in the codon and -1 so
-			     #the coordinate system starts with 0
-			     $last_codon_stop - 2 - 1,
-			     3);
-		    #The codon in the sequence that was already added
-		    my $right_codon_cur =
-		      substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
-			     #-2 to get the first base in the codon and -1 so
-			     #the coordinate system starts with 0
-			     $rec->{LAST_CODON_STOP} - 2 - 1,
-			     3);
-
-		    if($right_codon_new ne $right_codon_cur)
-		      {
-			#The relative positions in the codon being added that
-			#must stay the same
-			my $fixed_poses_new =
-			  [($last_codon_stop - 2)..$iden_stop];
-
-			#The relative positions in the codon already added that
-			#must stay the same
-			my $fixed_poses_cur =
-			  [($rec->{LAST_CODON_STOP} - 2)..
-			   $rec->{IDEN_STOP}];
-
-			my $tmp_codon =
-			  reCodeMerge($codon_hash,
-				      $right_codon_new,$fixed_poses_new,
-				      $right_codon_cur,$fixed_poses_cur);
-
-			#If we couldn't select an alternative codon that
-			#satisfies both sequences
-			if(!defined($tmp_codon) || $tmp_codon eq '')
-			  {
-			    if(!defined($tmp_codon))
-			      {error("Could not recode codons for sequence ",
-				     "[$seqid] at (sequence-relative, i.e. ",
-				     "not alignment) positions: ",
-				     "[",($last_codon_stop - 2),",",
-				     ($rec->{LAST_CODON_STOP} - 2),"] (which ",
-				     "should be the same position) in ",
-				     "alignments [$pairid,$rec->{PAIR_ID}].")}
-			    return(undef);
-			  }
-			#Else if an alternative codon was already selected to
-			#match another segment and it differs from what we got
-			#here
-			elsif(defined($alt_right_cdn) &&
-			      $alt_right_cdn ne $tmp_codon)
-			  {return(undef)}
-			#Else if this is a new alternate codon
-			elsif(!defined($alt_right_cdn))
-			  {$alt_right_cdn = $tmp_codon}
-		      }
-		  }
-
-		#If the left codon of the candidate segment being added and the
-		#right codon of the current segment already in the solution are
-		#not 100% covered by the identity region and they overlap
-		#(assuming the identity is at least 3 bases long) and we do not
-		#need to check if their identity boundaries are the same
-		#because they come in from different sides
-		#We're not going to worry about whether these records have
-		#alternate codons that were previously selected because either
-		#the same conclusion will be reached and the overlapping
-		#alternate codon record will agree and it'll be added or it
-		#won't.
-		if(#both codons are not 100% covered by the identity regs
-		   $iden_start != $first_codon_start &&
-		   $rec->{IDEN_STOP} != $rec->{LAST_CODON_STOP} &&
-
-		   #the codons overlap (i.e. are in the same [frame] location)
-		   $first_codon_start == ($rec->{LAST_CODON_STOP} - 2))
-		  {
-		    #The codon in the sequence being added
-		    my $left_codon_new =
-		      substr($hash->{$pairid}->{SEQS}->{$seqid},
-			     $first_codon_start - 1,
-			     3);
-		    #The codon in the sequence that was already added
-		    my $right_codon_cur =
-		      substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
-			     #-2 to get the first base in the codon and -1 so
-			     #the coordinate system starts with 0
-			     $rec->{LAST_CODON_STOP} - 2 - 1,
-			     3);
-
-		    if($left_codon_new ne $right_codon_cur)
-		      {
-			#The relative positions in the codon being added that
-			#must stay the same
-			my $fixed_poses_new =
-			  [$iden_start..($first_codon_start + 2)];
-
-			#The relative positions in the codon already added that
-			#must stay the same
-			my $fixed_poses_cur =
-			  [($rec->{LAST_CODON_STOP} - 2)..
-			   $rec->{IDEN_STOP}];
-
-			my $tmp_codon =
-			  reCodeMerge($codon_hash,
-				      $left_codon_new, $fixed_poses_new,
-				      $right_codon_cur,$fixed_poses_cur);
-
-			#If we couldn't select an alternative codon that
-			#satisfies both sequences
-			if(!defined($tmp_codon) || $tmp_codon eq '')
-			  {
-			    if(!defined($tmp_codon))
-			      {error("Could not recode codons for sequence ",
-				     "[$seqid] at (sequence-relative, i.e. ",
-				     "not alignment) positions: ",
-				     "[$first_codon_start,",
-				     ($rec->{LAST_CODON_STOP} - 2),"] (which ",
-				     "should be the same position) in ",
-				     "alignments [$pairid,$rec->{PAIR_ID}].")}
-			    return(undef);
-			  }
-			#Else if an alternative codon was already selected to
-			#match another segment and it differs from what we got
-			#here
-			elsif(defined($alt_left_cdn) &&
-			      $alt_left_cdn ne $tmp_codon)
-			  {return(undef)}
-			#Else if this is a new alternate codon
-			elsif(!defined($alt_left_cdn))
-			  {$alt_left_cdn = $tmp_codon}
-		      }
-		  }
-
-		#If the right codon of the candidate segment being added and
-		#the left codon of the current segment already in the solution
-		#are not 100% covered by the identity region and they overlap
-		#(assuming the identity is at least 3 bases long) and we do not
-		#need to check if their identity boundaries are the same
-		#because they come in from different sides
-		#We're not going to worry about whether these records have
-		#alternate codons that were previously selected because either
-		#the same conclusion will be reached and the overlapping
-		#alternate codon record will agree and it'll be added or it
-		#won't.
-		if(#both codons are not 100% covered by the identity regs
-		   $iden_stop != $last_codon_stop &&
-		   $rec->{IDEN_START} != $rec->{FIRST_CODON_START} &&
-
-		   #the codons overlap (i.e. are in the same [frame] location)
-		   ($last_codon_stop - 2) == $rec->{FIRST_CODON_START})
-		  {
-		    #The codon in the sequence being added
-		    my $right_codon_new =
-		      substr($hash->{$pairid}->{SEQS}->{$seqid},
-			     #-2 to get the first base in the codon and -1 so
-			     #the coordinate system starts with 0
-			     $last_codon_stop - 2 - 1,
-			     3);
-		    #The codon in the sequence that was already added
-		    my $left_codon_cur =
-		      substr($hash->{$rec->{PAIR_ID}}->{SEQS}->{$seqid},
-			     $rec->{FIRST_CODON_START} - 1,
-			     3);
-
-		    if($right_codon_new ne $left_codon_cur)
-		      {
-			#The relative positions in the codon being added that
-			#must stay the same
-			my $fixed_poses_new =
-			  [$iden_start..($first_codon_start + 2)];
-
-			#The relative positions in the codon already added that
-			#must stay the same
-			my $fixed_poses_cur =
-			  [($rec->{LAST_CODON_STOP} - 2)..
-			   $rec->{IDEN_STOP}];
-
-			my $tmp_codon =
-			  reCodeMerge($codon_hash,
-				      $right_codon_new,$fixed_poses_new,
-				      $left_codon_cur, $fixed_poses_cur);
-
-			#If we couldn't select an alternative codon that
-			#satisfies both sequences
-			if(!defined($tmp_codon) || $tmp_codon eq '')
-			  {
-			    if(!defined($tmp_codon))
-			      {error("Could not recode codons for sequence ",
-				     "[$seqid] at (sequence-relative, i.e. ",
-				     "not alignment) positions: ",
-				     "[",($last_codon_stop - 2),",",
-				     "$rec->{FIRST_CODON_START}] (which ",
-				     "should be the same position) in ",
-				     "alignments [$pairid,$rec->{PAIR_ID}].")}
-			    return(undef);
-			  }
-			#Else if an alternative codon was already selected to
-			#match another segment and it differs from what we got
-			#here
-			elsif(defined($alt_right_cdn) &&
-			      $alt_right_cdn ne $tmp_codon)
-			  {return(undef)}
-			#Else if this is a new alternate codon
-			elsif(!defined($alt_right_cdn))
-			  {$alt_right_cdn = $tmp_codon}
-		      }
-		  }
-
-		#At this point, if we've gotten here, the segment can still be
-		#added to the solution (as far as up to this number of
-		#overlapping segments looked at thus far goes).  We will keep
-		#looping to check the other overlaps.
 	      }
-	    else
+
+	    #If the already added alternate codon overlaps the candidate's
+	    #right edge codon
+	    if($rec->{IDEN_START} == ($last_codon_stop - 2))
 	      {
-		#This doesn't treat edge codons completely covered by the
-		#identity region any differently because the distinction is
-		#unimportant - what is done is the same test in each case
-
-		#If the already added alternate codon overlaps the candidate's
-		#left edge codon
-		if($rec->{IDEN_START} == $first_codon_start)
+		#If the candidate already has an alternate codon & differs
+		if(defined($alt_right_cdn) &&
+		   $alt_right_cdn ne $rec->{ALT_CODON})
+		  {return(undef)}
+		#If this alternate codon already exists in the solution as
+		#an alternate codon
+		elsif(defined($alt_right_cdn))
+		  {$no_right_cdn = 0}
+		else
 		  {
-		    #If the candidate already has an alternate codon & differs
-		    if(defined($alt_left_cdn) &&
-		       $alt_left_cdn ne $rec->{ALT_CODON})
-		      {return(undef)}
-		    #If this alternate codon already exists in the solution as
-		    #an alternate codon
-		    elsif(defined($alt_left_cdn))
-		      {$no_left_cdn = 0}
-		    else
-		      {
-			#Make sure the identity portion of the sequence being
-			#added is the same as the corresponding portion of the
-			#alternate codon that was already added
+		    #Make sure the identity portion of the sequence being
+		    #added is the same as the corresponding portion of the
+		    #alternate codon that was already added
 
-			#Obtain the subseq for this segment from the identity
-			#start to the end of the left edge codon
-			my $subseq1 =
-			  substr($hash->{$pairid}->{SEQS}->{$seqid},
-				 $iden_start - 1,
-				 #+2 to get the last codon base coord +1 to get
-				 #the size after getting the diff
-				 $first_codon_start + 2 - $iden_start + 1);
+		    #-2 to get the last codon first base coord, +1
+		    #to get the size after getting the diff
+		    my $relidsize =
+		      $iden_stop - ($last_codon_stop - 2) + 1;
 
-			#Obtain the subseq of the alternate codon from the
-			#relative identity start to the end of the codon
-			#Don't need to add 1 because start = 0 in substr()
-			my $relstart = $first_codon_start - $iden_start;
-			my $relsize  = 3 - $relstart;
-			my $subseq2 =
-			  substr($rec->{ALT_CODON},$relstart,$relsize);
-
-			if($subseq1 ne $subseq2)
-			  {return(undef)}
-		      }
-		  }
-
-		#If the already added alternate codon overlaps the candidate's
-		#right edge codon
-		if($rec->{IDEN_START} == ($last_codon_stop - 2))
-		  {
-		    #If the candidate already has an alternate codon & differs
-		    if(defined($alt_right_cdn) &&
-		       $alt_right_cdn ne $rec->{ALT_CODON})
-		      {return(undef)}
-		    #If this alternate codon already exists in the solution as
-		    #an alternate codon
-		    elsif(defined($alt_right_cdn))
-		      {$no_right_cdn = 0}
-		    else
-		      {
-			#Make sure the identity portion of the sequence being
-			#added is the same as the corresponding portion of the
-			#alternate codon that was already added
-
-			#-2 to get the last codon first base coord, +1
-			#to get the size after getting the diff
-			my $relidsize =
-			  $iden_stop - ($last_codon_stop - 2) + 1;
-
-			#Obtain the subseq for this segment from the identity
-			#start to the end of the left edge codon
-			my $subseq1 =
-			  substr($hash->{$pairid}->{SEQS}->{$seqid},
-				 $last_codon_stop - 2 - 1,
-				 $relidsize);
-
-			#Obtain the subseq of the alternate codon from the
-			#codon start to the relative identity stop
-			my $subseq2 =
-			  substr($rec->{ALT_CODON},0,$relidsize);
-
-			if($subseq1 ne $subseq2)
-			  {return(undef)}
-		      }
-		  }
-
-		#If the already added alternate codon overlaps the candidate's
-		#identity region (not including the edge codons' identity).
-		if($rec->{IDEN_START} >= ($first_codon_start + 3) &&
-		   $rec->{IDEN_START} <= ($last_codon_stop - 3))
-		  {
-		    #If the candidate has any alternate codons for its edges,
-		    #they do not matter in this case because they cannot
-		    #overlap.
-
-		    my $subseq =
+		    #Obtain the subseq for this segment from the identity
+		    #start to the end of the left edge codon
+		    my $subseq1 =
 		      substr($hash->{$pairid}->{SEQS}->{$seqid},
-			     $rec->{IDEN_START} - 1,
-			     3);
+			     $last_codon_stop - 2 - 1,
+			     $relidsize);
 
-		    if($subseq ne $rec->{ALT_CODON})
+		    #Obtain the subseq of the alternate codon from the
+		    #codon start to the relative identity stop
+		    my $subseq2 =
+		      substr($rec->{ALT_CODON},0,$relidsize);
+
+		    if($subseq1 ne $subseq2)
 		      {return(undef)}
 		  }
+	      }
+
+	    #If the already added alternate codon overlaps the candidate's
+	    #identity region (not including the edge codons' identity).
+	    if($rec->{IDEN_START} >= ($first_codon_start + 3) &&
+	       $rec->{IDEN_START} <= ($last_codon_stop - 3))
+	      {
+		#If the candidate has any alternate codons for its edges,
+		#they do not matter in this case because they cannot
+		#overlap.
+
+		my $subseq =
+		  substr($hash->{$pairid}->{SEQS}->{$seqid},
+			 $rec->{IDEN_START} - 1,
+			 3);
+
+		if($subseq ne $rec->{ALT_CODON})
+		  {return(undef)}
 	      }
 	  }
       }
@@ -1965,12 +1983,15 @@ sub scoreSolution
     my $spacing_score         = 0;
     my $base_score            = 0;
     my $num_regs              = 0;
+    my $inc_sanity_hash       = {};
 
-    #For each sequence we are constructing
+    #For each sequence we are constructing (present in the solution)
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
+	#For each identity segment record in the solution
 	foreach my $subseqrec (grep {$_->{TYPE} eq 'seg'} @{$soln->{$seqid}})
 	  {
+	    # Spacing score is required to be present
 	    if(!defined($subseqrec->{SPACING_SCORE}))
 	      {
 		error("Cannot call scoreSolution after solution has been ",
@@ -1979,6 +2000,7 @@ sub scoreSolution
 	      }
 
 	    my $pairid = $subseqrec->{PAIR_ID};
+	    $inc_sanity_hash->{$pairid}++;
 
 	    ## Inclusion score calculations... Record the unique base locations
 
@@ -2055,21 +2077,21 @@ sub scoreSolution
 	#it would be good to do a sanity check here in the future)
 	foreach my $seqid (sort {$a cmp $b} keys(%{$ubase_sums->{$pairid}}))
 	  {
-	    my $cur_size            = 0;
+	    my $cur_size            = 1;
 	    my $tmp_inclusion_score = 0;
 	    my($last_pos);
 	    foreach my $pos (sort {$a <=> $b}
 			     keys(%{$ubase_sums->{$pairid}->{$seqid}}))
 	      {
-		if(!defined($last_pos) || ($last_pos + 1) == $pos)
+		if(defined($last_pos) && ($last_pos + 1) == $pos)
 		  {$cur_size++}
-		else
+		elsif(defined($last_pos))
 		  {
 		    #Calculate the number of unique/independent segments
 		    my $usegs = int($cur_size / $max_size);
 		    if($usegs > 0)
 		      {$tmp_inclusion_score += $usegs}
-		    $cur_size = 0;
+		    $cur_size = 1;
 		  }
 		$last_pos = $pos;
 	      }
@@ -2099,6 +2121,14 @@ sub scoreSolution
 	if(!defined($lowest_inclusion_score) ||
 	   $inclusion_score < $lowest_inclusion_score)
 	  {$lowest_inclusion_score = $inclusion_score}
+
+	debug({LEVEL => 6},"Inclusion score for pair [$pairid]: ",
+	      "[$inclusion_score]. Lowest: [$lowest_inclusion_score] ",
+	      (exists($inc_sanity_hash->{$pairid}) &&
+	       defined($inc_sanity_hash->{$pairid}) ?
+	       "Sanity hash has: [$inc_sanity_hash->{$pairid}] segments" .
+	       ($inclusion_score != $inc_sanity_hash->{$pairid} ? '***' : '') :
+	       "Sanity hash has: [0] segments"));
       }
 
     ## Bases score calculation
@@ -2118,8 +2148,8 @@ foreach my $s1 (keys(%$stats))
 	 {$ttot += $stats->{$s1}->{$s2}->{$max_size}}
        if(!defined($tmin) || defined($stats->{$s1}->{$s2}->{$max_size}) && $stats->{$s1}->{$s2}->{$max_size} != 0 && $stats->{$s1}->{$s2}->{$max_size} < $tmin)
 	{$tmin = $stats->{$s1}->{$s2}->{$max_size}}}}
-$lowest_inclusion_score = $tmin;
-$total_inclusion_score = $ttot / 2;
+#$lowest_inclusion_score = $tmin;
+#$total_inclusion_score = $ttot / 2;
 
     ## Normalize the spacing score by the number of total regions in all pairs/
     ## sequences
@@ -2171,6 +2201,7 @@ sub generateHybrids
     #This has to be called on the merged overlapping segments version of the
     #solution, which contains all the duplicate segments from various pairwise
     #alignments, before the solution is further reduced to address conflicts
+    #and duplicates
     my $soln_stats = getSolutionStats($soln,$data,$sizes);
 
     verbose("Adjusting overlapping identity segments from different ",
@@ -2293,6 +2324,8 @@ sub reduceSolutionMergeOverlaps
     return($new_soln);
   }
 
+#This must only be called after merging overlaps and before calling any
+#reduceSolution* methods
 sub getSolutionStats
   {
     my $soln  = $_[0];
@@ -2306,6 +2339,17 @@ sub getSolutionStats
 	  {
 	    my $pair_id = $rec->{PAIR_ID};
 	    my($seqid1,$seqid2) = keys(%{$data->{$pair_id}->{SEQS}});
+
+	    #We will cycle through all the seqids in the loop above and set the
+	    #reciprocal values by making sure that seqid1 is always the seqid
+	    #from the above loop.  Then when we get to its partner in the above
+	    #loop, the reciprocal value will be set
+	    if($seqid1 ne $seqid)
+	      {
+		$seqid2 = $seqid1;
+		$seqid1 = $seqid;
+	      }
+
 	    foreach my $i (sort {$sizes->[$a] <=> $sizes->[$b]} 0..$#{$sizes})
 	      {
 		my $min1 = $sizes->[$i];
@@ -2314,8 +2358,8 @@ sub getSolutionStats
 
 		if($size >= $min1 && ($i == $#{$sizes} || $size < $min2))
 		  {
-		    $stats->{$seqid1}->{$seqid2}->{$size}++;
-		    $stats->{$seqid2}->{$seqid1}->{$size}++;
+		    my $times = int($size / $min1);
+		    $stats->{$seqid1}->{$seqid2}->{$min1} += $times;
 		  }
 	      }
 	  }
@@ -2661,9 +2705,10 @@ sub splitSegment
       {return()}
 
     #If the start overlaps anything but the start and the stop overlaps
-    #anything but the stop
+    #anything but the stop and the segment is larger than 2 codons
     if($start > $rec->{FINAL_START} && $start <= $rec->{FINAL_STOP} &&
-       $stop >= $rec->{FINAL_START} && $stop < $rec->{FINAL_STOP})
+       $stop >= $rec->{FINAL_START} && $stop  <  $rec->{FINAL_STOP} &&
+       ($rec->{FIRST_CODON_START} + 5) > $rec->{LAST_CODON_STOP})
       {
 	#The record must be broken into 3 pieces.  Edit the record to represent
 	#the left side and add the other 2
@@ -2703,6 +2748,47 @@ sub splitSegment
 		   $stop + 1,
 		   $saved_final_stop,
 		   undef);               #Don't replicate the spacing score
+
+if($start - 1 == 682)
+  {verbose("TEST1")}
+elsif($stop == 682)
+  {verbose("TEST2")}
+elsif($saved_iden_stop == 682)
+  {verbose("TEST3")}
+      }
+    #Else if the start overlaps anything but the start and the stop overlaps
+    #anything but the stop and the segment is 2 codons in size
+    elsif($start > $rec->{FINAL_START} && $start <= $rec->{FINAL_STOP} &&
+	  $stop >= $rec->{FINAL_START} && $stop  <  $rec->{FINAL_STOP} &&
+	  ($rec->{FIRST_CODON_START} + 5) == $rec->{LAST_CODON_STOP})
+      {
+	#The record must be broken into 3 pieces.  Edit the record to represent
+	#the left side and add the other 2
+
+	#The kept piece on the left side:
+	my $saved_final_stop    = $rec->{FINAL_STOP};
+	$rec->{FINAL_STOP}      = $start - 1;
+	my $saved_iden_stop     = $rec->{IDEN_STOP};
+	$rec->{IDEN_STOP}       = $start - 1;
+	$rec->{LAST_CODON_STOP} = $start - 1;
+
+	#Add a new piece on the right side
+	addSegment($soln,
+		   $rec->{PAIR_ID},
+		   $seqid,
+		   $stop + 1,
+		   $saved_iden_stop,
+		   $stop + 1,
+		   $saved_final_stop,
+		   $rec->{TYPE},
+		   $rec->{ALT_CODON},
+		   $stop + 1,
+		   $saved_final_stop,
+		   undef);               #Don't replicate the spacing score
+if($start - 1 == 682)
+  {verbose("TEST4")}
+elsif($saved_iden_stop == 682)
+  {verbose("TEST5")}
       }
     #Elsif the start overlaps anything but the start
     elsif($start > $rec->{FINAL_START} && $start <= $rec->{FINAL_STOP})
@@ -2729,6 +2815,10 @@ sub splitSegment
 		   $start,
 		   $saved_final_stop,
 		   undef);               #Don't replicate the spacing score
+if($start - 1 == 682)
+  {verbose("TEST6")}
+elsif($saved_iden_stop == 682)
+  {verbose("TEST7 REC $rec->{PAIR_ID} NEW IDEN_START: $start IDEN_STOP: $saved_iden_stop REC ORIG FINAL START: $rec->{FINAL_START}")}
       }
     #Elsif the stop overlaps anything but the stop
     elsif($stop >= $rec->{FINAL_START} && $stop < $rec->{FINAL_STOP})
@@ -2755,6 +2845,10 @@ sub splitSegment
 		   $saved_final_start,
 		   $stop,
 		   undef);               #Don't replicate the spacing score
+if($stop + 1 == 685)
+  {verbose("TEST8 Adding IDEN_START $saved_iden_start IDEN_STOP $stop FIRST CODON START $saved_final_start LAST CODON STOP $stop TYPE $rec->{TYPE} PAIR $rec->{PAIR_ID}")}
+elsif($saved_iden_start == 685)
+  {verbose("TEST9")}
       }
     else
       {error("Unexpected case.  No overlap was found for splitting the ",
@@ -2876,10 +2970,15 @@ sub updateFinalCoords
 		  }
 
 		#When segments are completely overlapped by other segments,
-		#their FINAL_STOP is set to 0.  Other math in adjusting for
-		#overlap can also result in the FINAL_START being larger than
-		#the FINAL_STOP when total overlap exists.  These segments can
-		#be skipped.
+		#their FINAL_STOP is set to 0 (by clipSegments above).  Other
+		#math in adjusting for overlap can also result in the
+		#FINAL_START being larger than the FINAL_STOP when total
+		#overlap exists.  These segments can be skipped.  However, when
+		#a FIRST_START_CODON and LAST_STOP_CODON have the same coords,
+		#but their identity segments DO NOT overlap, this is the only
+		#case where overlap is permitted - all this is handled in
+		#clipSegments by splitting the records at overlap bounds and
+		#manipulating the coordinates.
 		if($currec->{FINAL_START} <= $currec->{FINAL_STOP})
 		  {push(@current,{%$currec})}
 	      }
@@ -2976,7 +3075,33 @@ sub clipSegments
     #of segment 2 to 0 so that it will get eliminated
     if($seg2->{FINAL_STOP} <= $seg1->{FINAL_STOP} &&
        $seg2->{FINAL_STOP} >= $seg1->{FINAL_START})
-      {$seg2->{FINAL_STOP} = 0}
+      {
+	#If the stop of segment 2 is inside segment 1, every other portion of
+	#segment 2 to the left is assumed to overlap because of the way the
+	#calling method keeps a buffer of overlapping segments.  However, if
+	#the overlapping segments are both end codons, there's a chance that
+	#their identities do not (fully) overlap (if each was split off of
+	#segments to the left and right).  They would have been split because
+	#their final coords (not their identity coords) overlap.  This is the
+	#only case where we will keep overlapping segments as they are, because
+	#we need to make sure we keep any identity coordinate that does not
+	#have overlap.
+	if(!(#These are both single codon segments
+	     ($seg1->{FINAL_START} + 2) == $seg1->{FINAL_STOP} &&
+	     ($seg2->{FINAL_START} + 2) == $seg2->{FINAL_STOP} &&
+	     (#Both have no identity on opposite sides, i.e. both are required
+	      #to preserve all identity coordinates
+	      ($seg1->{IDEN_START} != $seg1->{FINAL_START} &&
+	       $seg2->{FINAL_STOP} != $seg2->{IDEN_STOP}) ||
+	      ($seg1->{IDEN_STOP} != $seg1->{FINAL_STOP} &&
+	       $seg2->{FINAL_START} != $seg2->{IDEN_START}))))
+	   {$seg2->{FINAL_STOP} = 0}
+
+	#This should be the only place I have to do this.  There should not
+	#exist a case where the start codon of segment 2 overlaps the stop
+	#codon of segment 1, where one or both are longer than a singkle codon,
+	#because we're assuming that they were split earlier.
+      }
     #Else if there's not really overlap, it might be one that was adjusted
     #before, so leave it alone
     elsif($seg2->{FINAL_STOP} < $seg1->{FINAL_START})
