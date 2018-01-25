@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.019';
+our $VERSION = '1.020';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
