@@ -1467,10 +1467,11 @@ sub segmentFits
 				    $last_codon_stop,
 				    $max_size);
 
-    debug("Checking overlapping $seqid record starts: [",
-	  join(',',map {$_->{FIRST_CODON_START}} @$seqlist),"] out of [",
-	  (exists($soln->{$seqid}) ? scalar(@{$soln->{$seqid}}) : '0'),
-	  "] records to see if [$seqid:$first_codon_start] fits");
+    if(isDebug() == 1)
+      {debug("Checking overlapping $seqid record starts: [",
+	     join(',',map {$_->{FIRST_CODON_START}} @$seqlist),"] out of [",
+	     (exists($soln->{$seqid}) ? scalar(@{$soln->{$seqid}}) : '0'),
+	     "] records to see if [$seqid:$first_codon_start] fits")}
 
     foreach my $rec (@$seqlist)
       {
@@ -1724,9 +1725,10 @@ sub segmentFits
 				  $right_codon_cur,$fixed_poses_cur,
 				  1);
 
-		    debug("Alternate codon selected 1: [",
-			  (defined($tmp_codon) ? $tmp_codon : 'undef'),
-			  "] for position [$seqid:$first_codon_start].");
+		    if(isDebug() == 1)
+		      {debug("Alternate codon selected 1: [",
+			     (defined($tmp_codon) ? $tmp_codon : 'undef'),
+			     "] for position [$seqid:$first_codon_start].")}
 
 		    #If we couldn't select an alternative codon that
 		    #satisfies both sequences
@@ -1804,9 +1806,10 @@ sub segmentFits
 				  $left_codon_cur, $fixed_poses_cur,
 				  1);
 
-		    debug("Alternate codon selected 2: [",
-			  (defined($tmp_codon) ? $tmp_codon : 'undef'),
-			  "] for position [$seqid:$first_codon_start].");
+		    if(isDebug() == 1)
+		      {debug("Alternate codon selected 2: [",
+			     (defined($tmp_codon) ? $tmp_codon : 'undef'),
+			     "] for position [$seqid:$first_codon_start].")}
 
 		    #If we couldn't select an alternative codon that
 		    #satisfies both sequences
@@ -2161,8 +2164,8 @@ foreach my $s1 (keys(%$stats))
 	 {$ttot += $stats->{$s1}->{$s2}->{$max_size}}
        if(!defined($tmin) || defined($stats->{$s1}->{$s2}->{$max_size}) && $stats->{$s1}->{$s2}->{$max_size} != 0 && $stats->{$s1}->{$s2}->{$max_size} < $tmin)
 	{$tmin = $stats->{$s1}->{$s2}->{$max_size}}}}
-$lowest_inclusion_score = $tmin;
-$total_inclusion_score = $ttot / 2;
+#$lowest_inclusion_score = $tmin;
+#$total_inclusion_score = $ttot / 2;
 
     ## Normalize the spacing score by the number of total regions in all pairs/
     ## sequences
@@ -2373,15 +2376,19 @@ sub getSolutionStats
 		my $min1 = $sizes->[$i];
 		my $min2 = $i == $#{$sizes} ? 0 : $sizes->[$i + 1];
 		my $size = $rec->{IDEN_STOP} - $rec->{IDEN_START} + 1;
-
 		if(!exists($seen
-			   ->{"$seqid:$rec->{IDEN_START}-$rec->{IDEN_STOP}"})
+			   ->{"$seqid:$rec->{IDEN_START}-$rec->{IDEN_STOP}:" .
+			      "$seqid2"})
 		   && $size >= $min1 && ($i == $#{$sizes} || $size < $min2))
 		  {
 		    my $times = int($size / $min1);
+		    if($i == 0 && !$times)
+		      {error("Segment size in the solution for [$seqid] is ",
+			     "below the minimum: [$size / $min1].")}
 		    $stats->{$seqid1}->{$seqid2}->{$min1} += $times;
 
-		    $seen->{"$seqid:$rec->{IDEN_START}-$rec->{IDEN_STOP}"} = 0;
+		    $seen->{"$seqid:$rec->{IDEN_START}-$rec->{IDEN_STOP}:" .
+			    "$seqid2"} = 0;
 		  }
 	      }
 	  }
