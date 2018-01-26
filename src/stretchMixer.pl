@@ -275,7 +275,7 @@ elsif(scalar(grep {$_ < 3} @$stretch_mins))
     error("Value(s) for --stretch-min below allowed minimum: [",
 	  join(' ',grep {$_ < 3} @$stretch_mins),"].",
 	  {DETAIL => ('The minimum value for a stretch size is 3.')});
-    quit(2);
+    quit(3);
   }
 
 my $codon_data_hash  = {};
@@ -6104,6 +6104,7 @@ sub loadAlignment
     my $stretch_sizes = $_[1];
     my $hash          = $_[2];
     my $recnum        = 0;
+    my $codon_err     = 0;
     my $len           = -1;
 
     if(ref($stretch_sizes) ne 'ARRAY' || scalar(@$stretch_sizes) == 0)
@@ -6169,6 +6170,22 @@ sub loadAlignment
 	    return(4);
 	  }
 
+	#Error-check that the sequence is codon-aligned
+	if(!codonAligned($rec->[1]))
+	  {
+	    error("Sequence [$id] from file [$alnfile] is not codon-aligned.",
+		  {DETAIL => join('','This script operates on the nucleotide ',
+				  '-o output of codonHomologizer.pl when -a ',
+				  'is "on"/true (its default).  Any set of ',
+				  'pair-wise alignments can be submitted, as ',
+				  'long as they are codon-aligned, due to ',
+				  'the assumption it makes that the codons ',
+				  'are aligned.  Having aligned codons is ',
+				  'ideal for crossover events resulting in ',
+				  'frame-correct results.')});
+	    $codon_err++;
+	  }
+
 	$hash->{$pairid}->{ALNS}->{$id} = $rec->[1];
 	$hash->{$pairid}->{SEQS}->{$id} = $rec->[1];
 	$hash->{$pairid}->{SEQS}->{$id} =~ s/-+//g;
@@ -6176,12 +6193,15 @@ sub loadAlignment
 
     closeIn(*ALN);
 
+    if($codon_err)
+      {return(5)}
+
     if($recnum < 2)
       {
 	error("Only [$recnum] aligned sequences were found in alignment file ",
 	      "[$alnfile].  Two sequences are required in each alignment ",
 	      "file.");
-	return(5);
+	return(6);
       }
 
     return(loadSegments($hash->{$pairid},
@@ -6191,6 +6211,26 @@ sub loadAlignment
 			#Sequences (sorted by IDs) - can only be 2 keys
 			(map {$hash->{$pairid}->{ALNS}->{$_}}
 			 sort(keys(%{$hash->{$pairid}->{ALNS}})))));
+  }
+
+#This checks to see if the supplied alignment sequence is codon-aligned
+sub codonAligned
+  {
+    my $seq = $_[0];
+    my $l   = length($seq);
+    my $n   = 0;
+
+    for(my $c = 0;$c < $l;$c++)
+      {
+	my $nt = substr($seq,$c,1);
+	if($nt eq '-')
+	  {if($n % 3)
+	     {return(0)}}
+	else
+	  {$n++}
+      }
+
+    return(1);
   }
 
 #Takes 2 alignment strings and finds identical segments to load into a hash for
