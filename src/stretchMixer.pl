@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.023';
+our $VERSION = '1.024';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -4741,12 +4741,20 @@ sub dividerExists
 			     grep {$_ >= $lesser_bound && $_ <= $greater_bound}
 			     keys(%{$div_map->{$seqid}})];
 
-	#If multiple dividers were found and at least 1 is nonsource, issue a
+	#If multiple dividers were found and at least 1 is nonsource and occurs
+	#after a source divider (i.e. it interrupts a source divider), issue a
 	#warning.
 	if(scalar(@$existing_divs) > 1 &&
-	   scalar(grep {!defined($div_map->{$seqid}->{$_}->{TYPE}) ||
-			  $div_map->{$seqid}->{$_}->{TYPE} ne 'SOURCE'}
-		  @$existing_divs))
+	   scalar(grep {(!defined($div_map->{$seqid}->{$existing_divs->[$_]}
+				  ->{TYPE}) ||
+			 $div_map->{$seqid}->{$existing_divs->[$_]}->{TYPE} ne
+			 'SOURCE') && $_ > 0 &&
+			   defined($div_map->{$seqid}
+				   ->{$existing_divs->[$_ - 1]}->{TYPE}) &&
+				     $div_map->{$seqid}
+				       ->{$existing_divs->[$_ - 1]}->{TYPE} eq
+					 'SOURCE'}
+		  (0..$#{$existing_divs})))
 	  {
 	    my $divwarnkey = "$seqid:$lesser_bound-$greater_bound";
 	    $divider_warnings->{$divwarnkey}->{MSG} =
@@ -4826,31 +4834,40 @@ sub dividerExists
 	  "$partner_seqid:$partner_lesser and $partner_seqid:",
 	  "$partner_greater according to alignment $pair_id");
 
+    #If multiple dividers were found and at least 1 is nonsource and occurs
+    #after a source divider (i.e. it interrupts a source divider), issue a
+    #warning.
     if(scalar(@$existing_divs) > 1 &&
-       scalar(grep {!defined($div_map->{$partner_seqid}->{$_}->{TYPE}) ||
-		      $div_map->{$partner_seqid}->{$_}->{TYPE} ne 'SOURCE'}
-	      @$existing_divs))
+       scalar(grep {(!defined($div_map->{$partner_seqid}
+			      ->{$existing_divs->[$_]}->{TYPE}) ||
+		     $div_map->{$partner_seqid}->{$existing_divs->[$_]}
+		     ->{TYPE} ne 'SOURCE') && $_ > 0 &&
+		       defined($div_map->{$partner_seqid}
+			       ->{$existing_divs->[$_ - 1]}->{TYPE}) &&
+				 $div_map->{$partner_seqid}
+				   ->{$existing_divs->[$_ - 1]}->{TYPE} eq
+				     'SOURCE'}
+		  (0..$#{$existing_divs})))
       {
-	    my $divwarnkey = "$partner_seqid:$partner_lesser-$partner_greater";
-	    $divider_warnings->{$divwarnkey}->{MSG} =
-	      join('',("Multiple dividers found between segment boundaries: ",
-		       "[$partner_seqid:$partner_lesser] and ",
-		       "[$partner_seqid:$partner_greater] that are deemed ",
-		       "'closest': [",
-		       join(' ',map {"$partner_seqid:$_(" .
-				       (defined($div_map->{$partner_seqid}
-						->{$_}->{TYPE}) ?
-					$div_map->{$partner_seqid}->{$_}
-					->{TYPE} : 'RECODE') . ")"}
-			    @$existing_divs),"]."));
-	    $divider_warnings->{$divwarnkey}->{DETAIL} =
-	      join('',("Bounds were converted from [$seqid:$lesser_bound] ",
-		       "and [$seqid:$greater_bound] and dividers were ",
-		       "converted back to: [",
-		       join(' ',map {"$seqid:$_"} @$existing_orig_divs),"]."));
-	    $divider_warnings->{$divwarnkey}->{SEQID} = $seqid;
-	    $divider_warnings->{$divwarnkey}->{DIVIDERS} =
-	      [@$existing_orig_divs];
+	my $divwarnkey = "$partner_seqid:$partner_lesser-$partner_greater";
+	$divider_warnings->{$divwarnkey}->{MSG} =
+	  join('',("Multiple dividers found between segment boundaries: ",
+		   "[$partner_seqid:$partner_lesser] and [$partner_seqid:",
+		   "$partner_greater] that are deemed 'closest': [",
+		   join(' ',map {"$partner_seqid:$_(" .
+				   (defined($div_map->{$partner_seqid}
+					    ->{$_}->{TYPE}) ?
+				    $div_map->{$partner_seqid}->{$_}
+				    ->{TYPE} : 'RECODE') . ")"}
+			@$existing_divs),"]."));
+	$divider_warnings->{$divwarnkey}->{DETAIL} =
+	  join('',("Bounds were converted from [$seqid:$lesser_bound] and ",
+		   "[$seqid:$greater_bound] and dividers were converted back ",
+		   "to: [",
+		   join(' ',map {"$seqid:$_"} @$existing_orig_divs),"]."));
+	$divider_warnings->{$divwarnkey}->{SEQID} = $seqid;
+	$divider_warnings->{$divwarnkey}->{DIVIDERS} =
+	  [@$existing_orig_divs];
 	return($existing_orig_divs->[0]);
       }
     elsif(scalar(@$existing_divs))
