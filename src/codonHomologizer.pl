@@ -11,7 +11,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.18';
+our $VERSION = '1.19';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -158,7 +158,9 @@ addOption(GETOPTKEY   => 'a|align-codons!',
 			  'to match the amino acid alignment (see -o).  ' .
 			  'This is the default behavior.  Use --no-align-' .
 			  'codons to generate sequences without gap ' .
-			  'characters.'));
+			  'characters.  Note, stretchMixer.pl requires this ',
+			  'option to be "On"/true in order to mix the ',
+			  'sequences output to the files specified by -o.'));
 
 my($matrix_suffix);
 my $mat_out_type =
