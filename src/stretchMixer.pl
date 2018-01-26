@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.020';
+our $VERSION = '1.021';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -349,7 +349,8 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
       }
 
     #Keep the last verboseOverMe message on the screen by printing a "\n"
-    print STDERR ("\n");
+    if(isVerbose())
+      {print STDERR ("\n")}
 
     my $score = scoreSolution($solution,
 			      $input_data_hash->{$outfile}->{DATA},
@@ -465,6 +466,7 @@ sub getMaxWeavedSegments
     my $best         = $soln;
     my $best_score   = scoreSolution($soln,$hash,$max_size);
     my $greedy_done  = 0;
+    my $progress_msg = '';
 
     #While the first pair index still containing segments to try and add to the
     #solution is less than the number of pairs
@@ -497,16 +499,18 @@ sub getMaxWeavedSegments
 		      {$sol_size += scalar(grep {$_->{TYPE} eq 'seg'}
 					   @{$best->{$sk}})}
 		    my $num_seq_keys = scalar(keys(%$best));
-		    verboseOverMe("Progress: Depth:$depth size$size:pair",
-				  "$curpair($pair_least-",
-				  (scalar(@$pairs) - 1),"):reg",
-				  "$curregion($region_first->[$curpair]-",
-				  ($num_regions - 1),
-				  "):seg$counts->[$curpair]->[$curregion]/",
-				  (scalar(@{$hash->{$pairs->[$curpair]}->{REGS}
-					      ->{$size}->[$curregion]}) - 1),
-				  " SolnScore:",join(',',@$best_score),
-				  " NumSolSegs:$sol_size");
+		    $progress_msg =
+		      join('',("Solution search: Depth:$depth size$size:",
+			       "pair$curpair($pair_least-",
+			       (scalar(@$pairs) - 1),"):reg",
+			       "$curregion($region_first->[$curpair]-",
+			       ($num_regions - 1),
+			       "):seg$counts->[$curpair]->[$curregion]/",
+			       (scalar(@{$hash->{$pairs->[$curpair]}->{REGS}
+					   ->{$size}->[$curregion]}) - 1),
+			       " SolnScore:",scoreToString($best_score),
+			       " NumSolSegs:$sol_size"));
+		    verboseOverMe($progress_msg);
 
 		    if($counts->[$curpair]->[$curregion] >= $num_segs)
 		      {
@@ -585,7 +589,8 @@ sub getMaxWeavedSegments
 						     $max_size,
 						     $hash,
 						     $spc1,$spc2,
-						     $codon_hash);
+						     $codon_hash,
+						     $size);
 
 			$counts->[$curpair]->[$curregion]++;
 
@@ -716,6 +721,8 @@ sub getMaxWeavedSegments
 	last if($greedy && $greedy_done);
       }
 
+    verboseOverMe($progress_msg," Returning best solution at depth $depth");
+
     return($best);
   }
 
@@ -767,6 +774,8 @@ sub addSegment
 
     my $spacing_score     = $_[11];
 
+    my $add_size          = $_[12]; #Search size used to find this segment
+
     my $insert_index =
       findSegmentInsertPos($soln->{$seqid},$iden_start,$iden_stop);
     if(!defined($insert_index))
@@ -785,7 +794,8 @@ sub addSegment
 	    FINAL_STOP        => $final_stop,
 	    PAIR_ID           => $pairid,
 	    ALT_CODON         => $alt_codon,
-	    SPACING_SCORE     => $spacing_score});
+	    SPACING_SCORE     => $spacing_score,
+	    ADD_SIZE          => $add_size});
 
     return(0);
   }
@@ -920,11 +930,12 @@ sub addToSolution
     my $last_codon_stop1   = $_[9];
     my $first_codon_start2 = $_[10];
     my $last_codon_stop2   = $_[11];
-    my $max_size           = $_[12];
+    my $max_size           = $_[12]; #Needed to optimize overlap search
     my $hash               = $_[13];
     my $spacing_score1     = $_[14];
     my $spacing_score2     = $_[15];
     my $codon_hash         = $_[16];
+    my $add_size           = $_[17]; #Used to know how to score the solution
 
     my $fit_data1 = segmentFits($soln,
 				$seqid1,
@@ -969,7 +980,8 @@ sub addToSolution
 	       $first_codon_start1,
 	       $last_codon_stop1,
 
-	       $spacing_score1);
+	       $spacing_score1,
+	       $add_size);
 
     addSegment($new_soln,
 	       $pairid,
@@ -986,7 +998,8 @@ sub addToSolution
 	       $first_codon_start2,
 	       $last_codon_stop2,
 
-	       $spacing_score2);
+	       $spacing_score2,
+	       $add_size);
 
     if(defined($fit_data1->{LEFT_CODON}))
       {
@@ -1005,6 +1018,7 @@ sub addToSolution
 		   $first_codon_start1,
 		   $first_codon_start1 + 2,
 
+		   undef,
 		   undef);
       }
 
@@ -1025,6 +1039,7 @@ sub addToSolution
 		   $last_codon_stop1 - 2,
 		   $last_codon_stop1,
 
+		   undef,
 		   undef);
       }
 
@@ -1045,6 +1060,7 @@ sub addToSolution
 		   $first_codon_start2,
 		   $first_codon_start2 + 2,
 
+		   undef,
 		   undef);
       }
 
@@ -1065,6 +1081,7 @@ sub addToSolution
 		   $last_codon_stop2 - 2,
 		   $last_codon_stop2,
 
+		   undef,
 		   undef);
       }
 
@@ -2166,20 +2183,6 @@ sub scoreSolution
       {foreach my $seqid (keys(%{$occupied->{$pairid}}))
 	 {$base_score += scalar(keys(%{$occupied->{$pairid}->{$seqid}}))}}
 
-#####THIS IS A TEST TO SEE IF I CAN FIX THE LOWEST INCLUSION SCORE
-my $stats = getSolutionStats($soln,$hash,[$max_size]);
-my $tmin  = scalar(keys(%$soln)) ? undef : 0;
-my $ttot  = 0;
-foreach my $s1 (keys(%$stats))
-  {foreach my $s2 (keys(%{$stats->{$s1}}))
-     {
-       if(defined($stats->{$s1}->{$s2}->{$max_size}))
-	 {$ttot += $stats->{$s1}->{$s2}->{$max_size}}
-       if(!defined($tmin) || defined($stats->{$s1}->{$s2}->{$max_size}) && $stats->{$s1}->{$s2}->{$max_size} != 0 && $stats->{$s1}->{$s2}->{$max_size} < $tmin)
-	{$tmin = $stats->{$s1}->{$s2}->{$max_size}}}}
-#$lowest_inclusion_score = $tmin;
-#$total_inclusion_score = $ttot / 2;
-
     ## Normalize the spacing score by the number of total regions in all pairs/
     ## sequences
 
@@ -2188,27 +2191,105 @@ foreach my $s1 (keys(%$stats))
     #has more influence
     $spacing_score = int(sqrt($spacing_score));
 
-    push(@$score_obj,$lowest_inclusion_score,$total_inclusion_score,
-	 $spacing_score,$base_score);
+    $score_obj = {STRETCHES => {$max_size => [$lowest_inclusion_score,
+					      $total_inclusion_score,
+					      $spacing_score]},
+		  BASESCORE => $base_score};
 
-    return(wantarray ? @$score_obj : $score_obj);
+    return($score_obj);
   }
 
 sub candidateBetter
   {
+    my $cand_obj = $_[0];
+    my $best_obj = $_[1];
+
+    #If one of the solutions is not fully defined (defaulting to cand = better
+    if(!defined($best_obj) || !exists($best_obj->{STRETCHES}))
+      {return(1)}
+    elsif(!defined($cand_obj) || !exists($cand_obj->{STRETCHES}))
+      {return(0)}
+
+    my $cand_sizes = [sort {$b <=> $a} keys(%{$cand_obj->{STRETCHES}})];
+    my $best_sizes = [sort {$b <=> $a} keys(%{$best_obj->{STRETCHES}})];
+
+    #If one of the solutions is empty in terms of stretch sizes
+    if(scalar(@$best_sizes) && scalar(@$cand_sizes) == 0)
+      {return(0)}
+    elsif(scalar(@$best_sizes) == 0 && scalar(@$cand_sizes))
+      {return(1)}
+
+    #If the solutions consist of different complements of stretch sizes
+    if(scalar(@$best_sizes) != scalar(@$cand_sizes) ||
+       join(',',@$best_sizes) ne join(',',@$cand_sizes))
+      {
+	for(my $i = 0;$i <= $#{$best_sizes};$i++)
+	  {
+	    #If the candidate has fewer size segments
+	    if($#{$cand_sizes} < $i)
+	      {return(0)}
+
+	    if($best_sizes->[$i] > $cand_sizes->[$i])
+	      {return(0)}
+	    elsif($best_sizes->[$i] < $cand_sizes->[$i])
+	      {return(1)}
+	    else
+	      {
+		my $size = $best_sizes->[$i];
+		my $best = $best_obj->{STRETCHES}->{$size};
+		my $cand = $cand_obj->{STRETCHES}->{$size};
+		my $cmp  = candidateSizeCmp($cand,$best);
+
+		if($cmp == -1)
+		  {return(0)}
+		elsif($cmp == 1)
+		  {return(1)}
+	      }
+	  }
+	#The candidate must have more segment sizes (and everything else is the
+	#same)
+	return(1);
+      }
+
+    #If we get here, each solution has the same complement of stretch size data
+    #(as a type)
+    foreach my $size (@$best_sizes)
+      {
+	my $best = $best_obj->{STRETCHES}->{$size};
+	my $cand = $cand_obj->{STRETCHES}->{$size};
+	my $cmp  = candidateSizeCmp($cand,$best);
+
+	if($cmp == -1)
+	  {return(0)}
+	elsif($cmp == 1)
+	  {return(1)}
+      }
+
+    #The stretches are all equivalent, so let's use the number of uniquely
+    #covered bases
+    if($cand_obj->{BASESCORE} > $best_obj->{BASESCORE})
+      {return(1)}
+
+    #The candidate is not better
+    return(0);
+  }
+
+sub candidateSizeCmp
+  {
     my $cand = $_[0];
     my $best = $_[1];
 
-    if(!defined($best) || scalar(@$best) < 4 ||
+    if(!defined($best) || scalar(@$best) < 3 ||
        $cand->[0] > $best->[0] ||
        ($cand->[0] == $best->[0] && $cand->[1] > $best->[1]) ||
        ($cand->[0] == $best->[0] && $cand->[1] == $best->[1] &&
-	$cand->[2] < $best->[2]) ||
-       ($cand->[0] == $best->[0] && $cand->[1] == $best->[1] &&
-	$cand->[2] == $best->[2] && $cand->[3] > $best->[3]))
+	$cand->[2] < $best->[2]))
       {return(1)}
+    elsif($cand->[0] == $best->[0] && $cand->[1] == $best->[1] &&
+	  $cand->[2] == $best->[2])
+      {return(0)}
 
-    return(0);
+    return(-1);
   }
 
 #Creates a hash of hybrid sequences
@@ -2247,7 +2328,8 @@ sub generateHybrids
     #which partner sequence it should be recoded to best match).
     my $partners_hash = getPartnersHash($soln,$data);
 
-    verbose("Splitting identity segments for the recoding map...");
+    verbose("Splitting identity segments based on indirect overlap for the ",
+	    "recoding map...");
 
     $soln = reduceSolutionForIndirectConflicts($soln,$partners_hash,$data);
 
@@ -2281,8 +2363,9 @@ sub generateHybrids
 #record to represent an entire area of overlap
 sub reduceSolutionMergeOverlaps
   {
-    my $soln = $_[0];
+    my $soln     = $_[0];
     my $new_soln = {};
+
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
       {
 	my @ovlp_buffer = ();
@@ -2341,6 +2424,16 @@ sub reduceSolutionMergeOverlaps
 			$lastrec->{LAST_CODON_STOP} = $currec
 			  ->{LAST_CODON_STOP};
 			$lastrec->{FINAL_STOP}      = $currec->{FINAL_STOP};
+			if($lastrec->{ADD_SIZE} < $currec->{ADD_SIZE})
+			  {error("Smaller stretch size ",
+				 "[$lastrec->{ADD_SIZE}] merging with a ",
+				 "larger stretch size identity segment ",
+				 "[$currec->{ADD_SIZE}].",
+				 {DETAIL =>
+				  join('',('This should not happen because ',
+					   'of the ordering of the search ',
+					   'space and will corrupt the ',
+					   'solution score calculations.'))})}
 			#Keep the score of the better placed piece of identity
 			if($currec->{SPACING_SCORE} <
 			   $lastrec->{SPACING_SCORE})
@@ -2637,10 +2730,9 @@ sub reduceSolutionForIndirectConflicts
 
 	if($iter_num >= $warn_limit)
 	  {verbose("The search for indirect overlap is going longer than ",
-		   "expected.  Found $still_finding_overlap boundaries ",
-		   "on iteration $iter_num (the number of new boundaries ",
-		   "found each iteration should be (generally) trending ",
-		   "down).")}
+		   "expected.  Found $still_finding_overlap splits on ",
+		   "iteration $iter_num (the number of new splits found each ",
+		   "iteration should be (generally) trending down).")}
 
 	$still_finding_overlap = 0;
 
@@ -2706,6 +2798,17 @@ sub reduceSolutionForIndirectConflicts
 			my $partner_final_start = $partner_rec->{FINAL_START};
 			my $partner_final_stop  = $partner_rec->{FINAL_STOP};
 
+			my $msg =
+			  join('',("Indirect overlap search: Iter: $iter_num ",
+				   "Splits: $still_finding_overlap ",
+				   "$seqid:$rec->{FINAL_START}-",
+				   "$rec->{FINAL_STOP} vs ",
+				   "($indirect_partner_seqid:",
+				   "$partner_final_start-$partner_final_stop ",
+				   "-> $converted_final_start-",
+				   "$converted_final_stop)"));
+			verboseOverMe($msg);
+
 			#We're going to change the partners.  The partner will
 			#or already did change us.
 
@@ -2715,6 +2818,7 @@ sub reduceSolutionForIndirectConflicts
 			   ($converted_final_stop >= $partner_final_start &&
 			    $converted_final_stop < $partner_final_stop))
 			  {
+			    verboseOverMe($msg," Splitting overlap.");
 			    splitSegment($new_soln,
 					 $indirect_partner_seqid,
 					 $partner_rec,
@@ -2733,6 +2837,10 @@ sub reduceSolutionForIndirectConflicts
     #The above while is there in case I'm creating new potential dividing
     #points in a sequence that was already processed in a previous foreach loop
     #iteration
+
+    #Keep the last verboseOverMe message on the screen
+    if(isVerbose())
+      {print STDERR ("\n")}
 
     return($new_soln);
   }
@@ -2754,6 +2862,9 @@ sub splitSegment
     #Not to be used on alt codons
     if($rec->{TYPE} eq 'alt')
       {return()}
+
+    #This won't change
+    my $orig_size = $rec->{ADD_SIZE};
 
     #If the start overlaps anything but the start and the stop overlaps
     #anything but the stop and the segment is larger than 2 codons
@@ -2783,7 +2894,8 @@ sub splitSegment
 		   $rec->{ALT_CODON},
 		   $start,
 		   $stop,
-		   undef);               #Don't replicate the spacing score
+		   undef,                #Don't replicate the spacing score
+		   $orig_size);
 
 
 	#Add a new piece on the right side
@@ -2798,7 +2910,8 @@ sub splitSegment
 		   $rec->{ALT_CODON},
 		   $stop + 1,
 		   $saved_final_stop,
-		   undef);               #Don't replicate the spacing score
+		   undef,                #Don't replicate the spacing score
+		   $orig_size);
       }
     #Else if the start overlaps anything but the start and the stop overlaps
     #anything but the stop and the segment is 2 codons in size
@@ -2828,7 +2941,8 @@ sub splitSegment
 		   $rec->{ALT_CODON},
 		   $stop + 1,
 		   $saved_final_stop,
-		   undef);               #Don't replicate the spacing score
+		   undef,                #Don't replicate the spacing score
+		   $orig_size);
       }
     #Elsif the start overlaps anything but the start
     elsif($start > $rec->{FINAL_START} && $start <= $rec->{FINAL_STOP})
@@ -2854,7 +2968,8 @@ sub splitSegment
 		   $rec->{ALT_CODON},
 		   $start,
 		   $saved_final_stop,
-		   undef);               #Don't replicate the spacing score
+		   undef,                #Don't replicate the spacing score
+		   $orig_size);
       }
     #Elsif the stop overlaps anything but the stop
     elsif($stop >= $rec->{FINAL_START} && $stop < $rec->{FINAL_STOP})
@@ -2880,7 +2995,8 @@ sub splitSegment
 		   $rec->{ALT_CODON},
 		   $saved_final_start,
 		   $stop,
-		   undef);               #Don't replicate the spacing score
+		   undef,                #Don't replicate the spacing score
+		   $orig_size);
       }
     else
       {error("Unexpected case.  No overlap was found for splitting the ",
@@ -5390,18 +5506,41 @@ sub outputReport
 
 sub outputSolutionScore
   {
-    my $score = $_[0];
+    my $score_obj = $_[0];
 
-    print("\nSolution Score:\n",
-	  "$score->[0]\tMax number of size [$max_size] segments included ",
-	  "from the alignment with the fewest contributed segments of that ",
-	  "size\n$score->[1]\tTotal number of unique segments of size ",
-	  "[$max_size] per sequence included\n$score->[2]\tSegment spacing ",
-	  "score.  Int(sqrt()) of the sum of distances of the closest ",
-	  "segment to the region center, normalized by the number of ",
-	  "regions.  (A region represents the most even spacing possible ",
-	  "given the number of unique segments.)\n$score->[3]\tTotal number ",
-	  "of unique bases included in an identity segment of any size.\n");
+    if(!defined($score_obj) || !exists($score_obj->{STRETCHES}))
+      {print("No solutions found.\n")}
+    else
+      {
+	print("\nSolution Score:\n");
+	foreach my $size (sort {$b <=> $a} keys(%{$score_obj->{STRETCHES}}))
+	  {
+	    my $score = $score_obj->{STRETCHES}->{$size};
+	    print("$score->[0]\tMax number of size [$size] segments included ",
+		  "from the alignment with the fewest contributed segments ",
+		  "of that size\n",
+		  "$score->[1]\tTotal number of unique segments of size ",
+		  "[$size] for all sequences included\n",
+		  "$score->[2]\tSegment spacing score for segment size ",
+		  "[$size].  Int(sqrt()) of the sum of distances of the ",
+		  "closest segment to the region center, normalized by the ",
+		  "number of regions.  (A region represents the most even ",
+		  "spacing possible given the number of unique segments.)\n");
+	  }
+	print("$score_obj->{BASESCORE}\tTotal number of unique bases ",
+	      "included in an identity segment of any size.\n");
+      }
+  }
+
+sub scoreToString
+  {
+    my $score = $_[0];
+    if(!defined($score) || !exists($score->{STRETCHES}))
+      {return('')}
+    return(join(',',
+		(map {"$_\{" . join(',',@{$score->{STRETCHES}->{$_}}) . '}'}
+		 sort {$b <=> $a}
+		 keys(%{$score->{STRETCHES}})),$score->{BASESCORE}));
   }
 
 sub outputSegmentTable
