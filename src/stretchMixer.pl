@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.021';
+our $VERSION = '1.022';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -345,6 +345,7 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
 					 $max_size,
 					 $input_data_hash->{$outfile}
 					 ->{CDNHASH},
+					 $stretch_mins,
 					 1);
       }
 
@@ -354,7 +355,7 @@ foreach my $outfile (sort {$a cmp $b} keys(%$input_data_hash))
 
     my $score = scoreSolution($solution,
 			      $input_data_hash->{$outfile}->{DATA},
-			      $max_size);
+			      $stretch_mins);
 
     debug("Raw unreduced solution with unmerged overlapping identity segments",
 	  ":\n",solutionToString($solution),"\n");
@@ -453,18 +454,19 @@ sub getMaxWeavedSegments
     my $pairs        = $_[3];
     my $max_size     = $_[4];
     my $codon_hash   = $_[5];
-    my $greedy       = (defined($_[6])  ? $_[6]  : 1);
-    my $pair_least   = (defined($_[7])  ? $_[7]  : 0);           #DO NOT SUPPLY
-    my $pair_start   = (defined($_[8])  ? $_[8]  : $pair_least); #BELOW THIS
-    my $region_first = (defined($_[9])  ? $_[9]  : [(0) x scalar(@$pairs)]);
-    my $region_start = (defined($_[10]) ? $_[10] : [@$region_first]);
-    my $counts       = (defined($_[11]) ? $_[11] :
+    my $stretch_mins = $_[6];
+    my $greedy       = (defined($_[7])  ? $_[7]  : 1);
+    my $pair_least   = (defined($_[8])  ? $_[8]  : 0);           #DO NOT SUPPLY
+    my $pair_start   = (defined($_[9])  ? $_[9]  : $pair_least); #BELOW THIS
+    my $region_first = (defined($_[10]) ? $_[10]  : [(0) x scalar(@$pairs)]);
+    my $region_start = (defined($_[11]) ? $_[11] : [@$region_first]);
+    my $counts       = (defined($_[12]) ? $_[12] :
 			[map {[(0) x $hash->{$pairs->[$_]}->{NUMUNIQSEGS}
 			       ->{$size}]}
 			 0..$#{$pairs}]);
-    my $depth        = (defined($_[12]) ? $_[12] : 0);
+    my $depth        = (defined($_[13]) ? $_[13] : 0);
     my $best         = $soln;
-    my $best_score   = scoreSolution($soln,$hash,$max_size);
+    my $best_score   = scoreSolution($soln,$hash,$stretch_mins);
     my $greedy_done  = 0;
     my $progress_msg = '';
 
@@ -649,6 +651,7 @@ sub getMaxWeavedSegments
 							     $pairs,
 							     $max_size,
 							     $codon_hash,
+							     $stretch_mins,
 							     $greedy,
 							     $pair_least,
 							     $next_pair,
@@ -662,11 +665,26 @@ sub getMaxWeavedSegments
 			    #See if this new candidate solution is better
 			    my $cand_score = scoreSolution($cand,
 							   $hash,
-							   $max_size);
+							   $stretch_mins);
 			    if(candidateBetter($cand_score,$best_score))
 			      {
 				$best_score = $cand_score;
 				$best       = $cand;
+
+				$progress_msg =
+				  join('',
+				       ("Solution search: Depth:$depth size",
+					"$size:pair$curpair($pair_least-",
+					(scalar(@$pairs) - 1),"):reg",
+					"$curregion($region_first->[$curpair]",
+					"-",($num_regions - 1),"):seg",
+					"$counts->[$curpair]->[$curregion]/",
+					(scalar(@{$hash->{$pairs->[$curpair]}
+						    ->{REGS}->{$size}
+						      ->[$curregion]}) - 1),
+					" SolnScore:",
+					scoreToString($best_score),
+					" NumSolSegs:$sol_size"));
 			      }
 
 			    $greedy_done = 1;
@@ -2015,8 +2033,8 @@ sub scoreSolution
   {
     my $soln      = $_[0];
     my $hash      = $_[1]; #Needed to get: ->{$pairid}->{NUMUNIQSEGS}->{$sz}
-    my $max_size  = $_[2]; #The largest identity segment (i.e. "stretch") size
-    my $score_obj = [];
+    my $sizes     = $_[2]; #Stretch minimums
+    my $score_obj = {};
 
     my $ubase_sums  = {}; #Hash used to sum of unique identity base positions
                           #included per pair/sequence
@@ -2024,12 +2042,11 @@ sub scoreSolution
                           #region center
     my $occupied    = {}; #A hash to count the number of segments included
 
-    my($lowest_inclusion_score);
-    my $total_inclusion_score = 0;
-    my $spacing_score         = 0;
-    my $base_score            = 0;
-    my $num_regs              = 0;
-    my $inc_sanity_hash       = {};
+    my $lowest_inclusion_score = {map {$_ => undef} @$sizes};
+    my $total_inclusion_score  = {map {$_ => 0} @$sizes};
+    my $spacing_score          = {};
+    my $base_score             = 0;
+    my $num_regs               = {};
 
     #For each sequence we are constructing (present in the solution)
     foreach my $seqid (sort {$a cmp $b} keys(%$soln))
@@ -2045,23 +2062,16 @@ sub scoreSolution
 		return(undef);
 	      }
 
-	    my $pairid = $subseqrec->{PAIR_ID};
-	    $inc_sanity_hash->{$pairid}++;
+	    my $pairid   = $subseqrec->{PAIR_ID};
+	    my $add_size = $subseqrec->{ADD_SIZE};
 
 	    ## Inclusion score calculations... Record the unique base locations
 
-	    #For each segment of size $max_size included in the solution (not
-	    #including alt. codons)
-	    if(($subseqrec->{IDEN_STOP} - $subseqrec->{IDEN_START} + 1) >=
-	       $max_size)
-	      {
-		#For each position of identity in this segment, record the
-		#position as the key in the hash (then we'll count the number
-		#of keys)
-		foreach my $pos ($subseqrec->{IDEN_START}..
-				 $subseqrec->{IDEN_STOP})
-		  {$ubase_sums->{$pairid}->{$seqid}->{$pos} = 0}
-	      }
+	    #For each position of identity in this segment, record the position
+	    #as the key in the hash (then we'll count the number of keys)
+	    foreach my $pos ($subseqrec->{IDEN_START}..
+			     $subseqrec->{IDEN_STOP})
+	      {$ubase_sums->{$add_size}->{$pairid}->{$seqid}->{$pos} = 0}
 
 	    ## Num score (number of non-identity-overlapped segments, any size)
 
@@ -2072,109 +2082,109 @@ sub scoreSolution
 	    ## Record the distance of the closest identity sequence from the
 	    ## region center
 
-	    my $middle = int($subseqrec->{IDEN_START} + $max_size / 2);
+	    my $middle = int($subseqrec->{IDEN_START} + $add_size / 2);
 	    my $period_len =
 	      int(length($hash->{$pairid}->{SEQS}->{$seqid}) /
-		  ($hash->{$pairid}->{NUMUNIQSEGS}->{$max_size} + 1));
+		  ($hash->{$pairid}->{NUMUNIQSEGS}->{$add_size} + 1));
 	    my $region = int($middle / $period_len);
-	    if(!exists($dist_scores->{$pairid}) ||
-	       !exists($dist_scores->{$pairid}->{$seqid}) ||
-	       !exists($dist_scores->{$pairid}->{$seqid}->{$region}) ||
+	    if(!exists($dist_scores->{$add_size}) ||
+	       !exists($dist_scores->{$add_size}->{$pairid}) ||
+	       !exists($dist_scores->{$add_size}->{$pairid}->{$seqid}) ||
+	       !exists($dist_scores->{$add_size}->{$pairid}->{$seqid}
+		       ->{$region}) ||
 	       $subseqrec->{SPACING_SCORE} <
-	       $dist_scores->{$pairid}->{$seqid}->{$region})
-	      {$dist_scores->{$pairid}->{$seqid}->{$region} =
+	       $dist_scores->{$add_size}->{$pairid}->{$seqid}->{$region})
+	      {$dist_scores->{$add_size}->{$pairid}->{$seqid}->{$region} =
 		 $subseqrec->{SPACING_SCORE}}
 	  }
       }
 
-    #For all possible pairs available
-    foreach my $pairid (sort {$a cmp $b} keys(%$hash))
+    foreach my $size (@$sizes)
       {
-	my $inclusion_score = 0;
-
-	## Spacing score calculations
-
-	#For all possible sequences
-	foreach my $seqid (keys(%{$hash->{$pairid}->{SEQS}}))
+	#For all possible pairs available
+	foreach my $pairid (sort {$a cmp $b} keys(%$hash))
 	  {
-	    my $period_len =
-	      int(length($hash->{$pairid}->{SEQS}->{$seqid}) /
-		  ($hash->{$pairid}->{NUMUNIQSEGS}->{$max_size} + 1));
-	    #For all possible regions
-	    foreach my $reg (0..($hash->{$pairid}->{NUMUNIQSEGS}->{$max_size} -
-				 1))
-	      {
-		$num_regs++;
-		if(exists($dist_scores->{$pairid}) &&
-		   exists($dist_scores->{$pairid}->{$seqid}) &&
-		   exists($dist_scores->{$pairid}->{$seqid}->{$reg}))
-		  {$spacing_score += $dist_scores->{$pairid}->{$seqid}->{$reg}}
-		else
-		  {$spacing_score += $period_len}
-	      }
-	  }
+	    my $inclusion_score = 0;
 
-	## Inclusion score calculations...
+	    ## Spacing score calculations
 
-	if(!exists($ubase_sums->{$pairid}))
-	  {$lowest_inclusion_score = 0}
-	#For each sequence in the pair (Note: the score for each should
-	#technically be the same, so doing it for both here is useless, though
-	#it would be good to do a sanity check here in the future)
-	foreach my $seqid (sort {$a cmp $b} keys(%{$ubase_sums->{$pairid}}))
-	  {
-	    my $cur_size            = 1;
-	    my $tmp_inclusion_score = 0;
-	    my($last_pos);
-	    foreach my $pos (sort {$a <=> $b}
-			     keys(%{$ubase_sums->{$pairid}->{$seqid}}))
+	    #For all possible sequences
+	    foreach my $seqid (keys(%{$hash->{$pairid}->{SEQS}}))
 	      {
-		if(defined($last_pos) && ($last_pos + 1) == $pos)
-		  {$cur_size++}
-		elsif(defined($last_pos))
+		my $period_len =
+		  int(length($hash->{$pairid}->{SEQS}->{$seqid}) /
+		      ($hash->{$pairid}->{NUMUNIQSEGS}->{$size} + 1));
+		#For all possible regions
+		foreach my $reg (0..($hash->{$pairid}->{NUMUNIQSEGS}->{$size} -
+				     1))
 		  {
-		    #Calculate the number of unique/independent segments
-		    my $usegs = int($cur_size / $max_size);
-		    if($usegs > 0)
-		      {$tmp_inclusion_score += $usegs}
-		    $cur_size = 1;
+		    $num_regs->{$size}++;
+		    if(exists($dist_scores->{$size}) &&
+		       exists($dist_scores->{$size}->{$pairid}) &&
+		       exists($dist_scores->{$size}->{$pairid}->{$seqid}) &&
+		       exists($dist_scores->{$size}->{$pairid}->{$seqid}
+			      ->{$reg}))
+		      {$spacing_score->{$size} +=
+			 $dist_scores->{$size}->{$pairid}->{$seqid}->{$reg}}
+		    else
+		      {$spacing_score->{$size} += $period_len}
 		  }
-		$last_pos = $pos;
 	      }
 
-	    #Calculate the last number of unique/independent segments
-	    my $usegs = int($cur_size / $max_size);
-	    if($usegs > 0)
-	      {$tmp_inclusion_score += $usegs}
+	    ## Inclusion score calculations...
 
-	    if(!defined($lowest_inclusion_score) ||
-	       $tmp_inclusion_score < $lowest_inclusion_score)
+	    #For each sequence in the pair (Note: the score for each should
+	    #technically be the same, so doing it for both here is useless,
+	    #though it would be good to do a sanity check here in the future)
+	    foreach my $seqid (sort {$a cmp $b}
+			       keys(%{$ubase_sums->{$size}->{$pairid}}))
 	      {
-		if($tmp_inclusion_score >
-		   $hash->{$pairid}->{NUMUNIQSEGS}->{$max_size})
-		  {error("The number of unique segments included in the ",
-			 "solution: [$tmp_inclusion_score] is larger ",
-			 "than the max possible calculated earlier: ",
-			 "[$hash->{$pairid}->{NUMUNIQSEGS}->{$max_size}].  ",
-			 "This should not have happened.  There must be a ",
-			 "bug somewhere in the code.")}
-		$lowest_inclusion_score = $tmp_inclusion_score;
+		my $cur_size            = 1;
+		my $tmp_inclusion_score = 0;
+		my($last_pos);
+		foreach my $pos (sort {$a <=> $b}
+				 keys(%{$ubase_sums->{$size}->{$pairid}
+					  ->{$seqid}}))
+		  {
+		    if(defined($last_pos) && ($last_pos + 1) == $pos)
+		      {$cur_size++}
+		    elsif(defined($last_pos))
+		      {
+			#Calculate the number of unique/independent segments
+			my $usegs = int($cur_size / $size);
+			if($usegs > 0)
+			  {$tmp_inclusion_score += $usegs}
+			$cur_size = 1;
+		      }
+		    $last_pos = $pos;
+		  }
+
+		#Calculate the last number of unique/independent segments
+		my $usegs = int($cur_size / $size);
+		if($usegs > 0)
+		  {$tmp_inclusion_score += $usegs}
+
+		if(!defined($lowest_inclusion_score->{$size}) ||
+		   $tmp_inclusion_score < $lowest_inclusion_score->{$size})
+		  {
+		    if($tmp_inclusion_score >
+		       $hash->{$pairid}->{NUMUNIQSEGS}->{$size})
+		      {error("The number of unique segments included in the ",
+			     "solution: [$tmp_inclusion_score] is larger ",
+			     "than the max possible calculated earlier: ",
+			     "[$hash->{$pairid}->{NUMUNIQSEGS}->{$size}].  ",
+			     "This should not have happened.  There must ",
+			     "be a bug somewhere in the code.")}
+		    $lowest_inclusion_score->{$size} = $tmp_inclusion_score;
+		  }
+		$total_inclusion_score->{$size} += $tmp_inclusion_score;
+		$inclusion_score += $tmp_inclusion_score;
 	      }
-	    $total_inclusion_score += $tmp_inclusion_score;
-	    $inclusion_score += $tmp_inclusion_score;
+
+	    if(!defined($lowest_inclusion_score->{$size}) ||
+	       $inclusion_score < $lowest_inclusion_score->{$size})
+	      {$lowest_inclusion_score->{$size} = $inclusion_score}
 	  }
-
-	if(!defined($lowest_inclusion_score) ||
-	   $inclusion_score < $lowest_inclusion_score)
-	  {$lowest_inclusion_score = $inclusion_score}
-
-	debug({LEVEL => 6},"Inclusion score for pair [$pairid]: ",
-	      "[$inclusion_score]. Lowest: [$lowest_inclusion_score] ",
-	      (exists($inc_sanity_hash->{$pairid}) &&
-	       defined($inc_sanity_hash->{$pairid}) ?
-	       "Sanity hash has: [$inc_sanity_hash->{$pairid}] segments" .
-	       ($inclusion_score != $inc_sanity_hash->{$pairid} ? '***' : '') :
-	       "Sanity hash has: [0] segments"));
       }
 
     ## Bases score calculation
@@ -2182,19 +2192,21 @@ sub scoreSolution
     foreach my $pairid (keys(%$occupied))
       {foreach my $seqid (keys(%{$occupied->{$pairid}}))
 	 {$base_score += scalar(keys(%{$occupied->{$pairid}->{$seqid}}))}}
+    $score_obj->{BASESCORE} = $base_score;
 
-    ## Normalize the spacing score by the number of total regions in all pairs/
-    ## sequences
+    foreach my $size (@$sizes)
+      {
+	## Normalize the spacing score by the number of total regions in all
+	## pairs/sequences
+	$spacing_score->{$size} /= $num_regs->{$size};
+	#Take the square root and runcate both for display and so that base
+	#score has more influence
+	$spacing_score->{$size} = int(sqrt($spacing_score->{$size}));
 
-    $spacing_score /= $num_regs;
-    #Take the square root and runcate both for display and so that base score
-    #has more influence
-    $spacing_score = int(sqrt($spacing_score));
-
-    $score_obj = {STRETCHES => {$max_size => [$lowest_inclusion_score,
-					      $total_inclusion_score,
-					      $spacing_score]},
-		  BASESCORE => $base_score};
+	$score_obj->{STRETCHES}->{$size} = [$lowest_inclusion_score->{$size},
+					    $total_inclusion_score->{$size},
+					    $spacing_score->{$size}];
+      }
 
     return($score_obj);
   }
@@ -2731,8 +2743,9 @@ sub reduceSolutionForIndirectConflicts
 	if($iter_num >= $warn_limit)
 	  {verbose("The search for indirect overlap is going longer than ",
 		   "expected.  Found $still_finding_overlap splits on ",
-		   "iteration $iter_num (the number of new splits found each ",
-		   "iteration should be (generally) trending down).")}
+		   "iteration ",($iter_num - 1)," (the number of new splits ",
+		   "found each iteration should be (generally) trending ",
+		   "down).")}
 
 	$still_finding_overlap = 0;
 
@@ -5512,23 +5525,34 @@ sub outputSolutionScore
       {print("No solutions found.\n")}
     else
       {
-	print("\nSolution Score:\n");
+	my $multi = scalar(keys(%{$score_obj->{STRETCHES}})) > 1;
+	print("\nSolution Score",($multi ? ":\n" : ''));
 	foreach my $size (sort {$b <=> $a} keys(%{$score_obj->{STRETCHES}}))
 	  {
+	    if($multi)
+	      {print("\tStretch Size $size:\n")}
+	    else
+	      {print(" (Stretch size $size):\n")}
+
 	    my $score = $score_obj->{STRETCHES}->{$size};
-	    print("$score->[0]\tMax number of size [$size] segments included ",
-		  "from the alignment with the fewest contributed segments ",
-		  "of that size\n",
-		  "$score->[1]\tTotal number of unique segments of size ",
-		  "[$size] for all sequences included\n",
-		  "$score->[2]\tSegment spacing score for segment size ",
-		  "[$size].  Int(sqrt()) of the sum of distances of the ",
-		  "closest segment to the region center, normalized by the ",
-		  "number of regions.  (A region represents the most even ",
-		  "spacing possible given the number of unique segments.)\n");
+	    print(($multi ? "\t" : ''),
+		  "\t$score->[0]\tMax number of segments included from the ",
+		  "alignment with the fewest contributed segments\n",
+		  ($multi ? "\t" : ''),
+		  "\t$score->[1]\tTotal number of unique segments included ",
+		  "among all sequences\n",
+		  ($multi ? "\t" : ''),
+		  "\t$score->[2]\tSegment spacing score*.\n");
 	  }
-	print("$score_obj->{BASESCORE}\tTotal number of unique bases ",
-	      "included in an identity segment of any size.\n");
+	print(($multi ? "\tOverall Coverage\n" : ''),
+	      ($multi ? "\t" : ''),
+	      "\t$score_obj->{BASESCORE}\tTotal number of unique bases ",
+	      "included in an identity segment of any size.\n\n");
+	print("* Int(sqrt()) of the sum of distances of the closest segment ",
+	      "to its region's center, normalized by the number of regions.  ",
+	      "(A region represents the most even spacing possible given the ",
+	      "number of unique segments.)  Smaller spacing scores are ",
+	      "better.\n");
       }
   }
 
