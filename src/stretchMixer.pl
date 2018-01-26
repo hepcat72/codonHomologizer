@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.022';
+our $VERSION = '1.023';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -107,6 +107,7 @@ addArrayOption(GETOPTKEY   => 's|stretch-min=s',
 	       DEFAULT     => $stretch_mins_def,
 	       HIDDEN      => 0,
 	       INTERPOLATE => 1,
+	       ACCEPTS     => ['>=3'],
 	       SMRY_DESC   => 'Length of contiguous identity to search & mix.',
 	       DETAIL_DESC => << "END_DETAIL"
 
@@ -268,6 +269,13 @@ if(scalar(@$stretch_mins) == 0 || scalar(grep {/\D/} @$stretch_mins))
 			  'must be unsigned integers.')});
 	quit(2);
       }
+  }
+elsif(scalar(grep {$_ < 3} @$stretch_mins))
+  {
+    error("Value(s) for --stretch-min below allowed minimum: [",
+	  join(' ',grep {$_ < 3} @$stretch_mins),"].",
+	  {DETAIL => ('The minimum value for a stretch size is 3.')});
+    quit(2);
   }
 
 my $codon_data_hash  = {};
