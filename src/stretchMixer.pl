@@ -767,7 +767,8 @@ sub addSegment
 
     my $spacing_score     = $_[11];
 
-    my $insert_index = findSegmentInsertPos($soln->{$seqid},$iden_start);
+    my $insert_index =
+      findSegmentInsertPos($soln->{$seqid},$iden_start,$iden_stop);
     if(!defined($insert_index))
       {
 	error("Insert of segment into [$seqid] failed.");
@@ -815,11 +816,13 @@ sub solutionToString
     return($str);
   }
 
-#This returns the index where the record should go.
+#This returns the index where the record should go.  The ordering is by
+#ascending identity start coordinate or descending identity stop coordinate
 sub findSegmentInsertPos
   {
     my $seg_array  = $_[0];
     my $iden_start = $_[1];
+    my $iden_stop  = $_[2];
     my $index = 0;
 
     if(!defined($seg_array) || scalar(@$seg_array) == 0)
@@ -841,17 +844,27 @@ sub findSegmentInsertPos
 	if(($i == $mini || $i == $maxi))
 	  {last}
 
-	#If $i's segment starts to the left of the start coordinate, move the
+	#If $i's segment starts to the right of the start coordinate, move the
 	#right bound left
 	if($iden_start < $seg_array->[$i]->{IDEN_START})
 	  {$maxi = $i}
-	#Else if $i's segment starts to the right of the start coordinate, move
+	#Else if $i's segment starts to the left of the start coordinate, move
 	#the left bound right
 	elsif($iden_start > $seg_array->[$i]->{IDEN_START})
 	  {$mini = $i}
 	#Else $i's segment starts in the same place as the current segment
 	else
-	  {return($i + 1)}
+	  {
+	    while($i > $mini &&
+		  $iden_start == $seg_array->[$i-1]->{IDEN_START} &&
+		  $iden_stop > $seg_array->[$i]->{IDEN_STOP})
+	      {$i--}
+	    while($i < $maxi &&
+		  $iden_start == $seg_array->[$i+1]->{IDEN_START} &&
+		  $iden_stop < $seg_array->[$i]->{IDEN_STOP})
+	      {$i++}
+	    return($i + 1);
+	  }
 
 	$i = int(($maxi - $mini) / 2) + $mini;
       }
@@ -2290,8 +2303,13 @@ sub reduceSolutionMergeOverlaps
 	    my @tmp_ovlp_buffer = ();
 	    foreach my $lastrec (@ovlp_buffer)
 	      {
-		#If we have gone past this "last" record, it's good to add
-		if($lastrec->{LAST_CODON_STOP} < $currec->{FIRST_CODON_START})
+		#If we have gone past this "last" record, it's good to add.
+		#DO NOT edit to merge abutting segments. There should always be
+		#overlap because the segments are added exhaustively and exist
+		#in a staggered fashion.  If they abutt and there's no
+		#overlapping piece that connects them, that means that the
+		#partner's segments do not abutt.
+		if($lastrec->{IDEN_STOP} < $currec->{IDEN_START})
 		  {push(@{$new_soln->{$seqid}},$lastrec)}
 		else
 		  {push(@tmp_ovlp_buffer,$lastrec)}
@@ -2313,18 +2331,22 @@ sub reduceSolutionMergeOverlaps
 		#ovlp_buffer as its own thing to be searched for overlap on the
 		#next iteration)
 		foreach my $lastrec (grep {$_->{TYPE} eq 'seg' &&
-					     $currec->{IDEN_STOP} >
-					       $_->{IDEN_STOP} &&
-						 $_->{PAIR_ID} eq
-						   $currec->{PAIR_ID}}
+					     $_->{PAIR_ID} eq
+					       $currec->{PAIR_ID}}
 				     @ovlp_buffer)
 		  {
-		    $lastrec->{IDEN_STOP}       = $currec->{IDEN_STOP};
-		    $lastrec->{LAST_CODON_STOP} = $currec->{LAST_CODON_STOP};
-		    $lastrec->{FINAL_STOP}      = $currec->{FINAL_STOP};
-		    #Keep the score of the better placed piece of identity
-		    if($currec->{SPACING_SCORE} < $lastrec->{SPACING_SCORE})
-		      {$lastrec->{SPACING_SCORE} = $currec->{SPACING_SCORE}}
+		    if($currec->{IDEN_STOP} > $lastrec->{IDEN_STOP})
+		      {
+			$lastrec->{IDEN_STOP}       = $currec->{IDEN_STOP};
+			$lastrec->{LAST_CODON_STOP} = $currec
+			  ->{LAST_CODON_STOP};
+			$lastrec->{FINAL_STOP}      = $currec->{FINAL_STOP};
+			#Keep the score of the better placed piece of identity
+			if($currec->{SPACING_SCORE} <
+			   $lastrec->{SPACING_SCORE})
+			  {$lastrec->{SPACING_SCORE} =
+			     $currec->{SPACING_SCORE}}
+		      }
 		    $add = 0;
 		    last;
 		  }
