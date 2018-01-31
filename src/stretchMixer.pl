@@ -3620,6 +3620,8 @@ sub createLeftDividers
 		      $rec->{IDEN_START};
 		    $div_map->{$seqid}->{$divider_left}->{IDEN_STOP} =
 		      $rec->{IDEN_STOP};
+		    $div_map->{$seqid}->{$divider_left}->{HARD_STOP} =
+		      $rec->{FINAL_STOP};
 		  }
 	      }
 	    else
@@ -3639,6 +3641,7 @@ if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => 'SOURCE',
 		   STOP       => undef,
+		   HARD_STOP  => $rec->{FINAL_STOP},#To prevent bad REDOCE divs
 		   IDEN_START => $rec->{IDEN_START}, #Might be outside the
 		   IDEN_STOP  => $rec->{IDEN_STOP},  #coords, but that's OK
 		   SEQ        => ''};
@@ -3673,6 +3676,7 @@ if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => undef,
 		   STOP       => undef,
+		   HARD_STOP  => undef,
 		   IDEN_START => 0,
 		   IDEN_STOP  => 0,
 		   SEQ        => ''}
@@ -3770,9 +3774,9 @@ sub createRightDividers
 	    #This divider might have been copied from another sequence, so
 	    #check it for a conflict before recording it
 	    if(!exists($div_map->{$seqid}) ||
-	       !exists($div_map->{$seqid}->{$divider_right}) ||
-	       !defined($div_map->{$seqid}->{$divider_right}->{TYPE}) ||
-	       $div_map->{$seqid}->{$divider_right}->{TYPE} ne 'SOURCE')
+	       !exists($div_map->{$seqid}->{$divider_right})              )# ||
+#	       !defined($div_map->{$seqid}->{$divider_right}->{TYPE}) ||
+#	       $div_map->{$seqid}->{$divider_right}->{TYPE} ne 'SOURCE')
 	      {
 		debug({LEVEL => 4},
 		      (exists($div_map->{$seqid}) &&
@@ -3783,20 +3787,21 @@ sub createRightDividers
 		      "from $rec->{PAIR_ID} with identity coords ",
 		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
 
-if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}->{$divider_right})))
-  {warning("SANITY CHECK 2: OVERWRITING EXISTING DIVIDER: [$dividers_exist].")}
+#if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}->{$divider_right})))
+#  {warning("SANITY CHECK 2: OVERWRITING EXISTING DIVIDER: [$dividers_exist].")}
 
-if(!(exists($div_map->{$seqid}) &&
-     exists($div_map->{$seqid}->{$divider_right})))
-{
+#if(!(exists($div_map->{$seqid}) &&
+#     exists($div_map->{$seqid}->{$divider_right})))
+#{
 		$div_map->{$seqid}->{$divider_right} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   IDEN_START => 0,
 		   IDEN_STOP  => 0,
+		   HARD_STOP  => undef,
 		   TYPE       => undef,  #Don't know seg this belongs to yet,
 		   STOP       => undef,  #so allow it to be over-written with
 		   SEQ        => ''};    #another pair's copy by setting =undef
-}
+#}
 	      }
 
             #Copy this divider to the partner sequences
@@ -3832,6 +3837,7 @@ if(!(exists($div_map->{$seqid}) &&
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => undef,
 		   STOP       => undef,
+		   HARD_STOP  => undef,
 		   IDEN_START => 0,
 		   IDEN_STOP  => 0,
 		   SEQ        => ''};
@@ -3875,6 +3881,7 @@ sub setStaticMapDividers
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => 'SOURCE',
 		   STOP       => undef,
+		   HARD_STOP  => $rec->{FINAL_STOP},#To prevent bad RECODE divs
 		   IDEN_START => $rec->{IDEN_START}, #Might be outside the
 		   IDEN_STOP  => $rec->{IDEN_STOP},  #coords, but that's OK
 		   SEQ        => ''};
@@ -4067,6 +4074,11 @@ sub getClosestLeftDivider
 	  }
       }
 
+    #This means that a segment abutts this one either directly or indirectly,
+    #but in any case, the divider can't be anywhere else
+    if($closest == $coord)
+      {return($coord,$coord)}
+
     #See if there already exists a divider (or dividers) in this region in any
     #of the partners (or self).
     #Dividers with slightly different coordinates are common because their
@@ -4095,8 +4107,8 @@ sub getClosestLeftDivider
 	  {return($partner_divider,$closest)}
       }
 
-    #If this is the left-most edge of the sequence, then we can return it,
-    #otherwise, we mist find a mid-way dividing point between this identity
+    #If this is the left-most edge of the query sequence, then we can return
+    #it, otherwise, we mist find a mid-way dividing point between this identity
     #segment and the nearest one on the left
     if($closest == 1)
       {return($closest,$closest)}
@@ -4298,6 +4310,11 @@ sub getClosestRightDivider
 	  }
       }
 
+    #This means that a segment abutts this one either directly or indirectly,
+    #but in any case, the divider can't be anywhere else
+    if(($closest - 1) == $coord)
+      {return($closest,$closest)}
+
     #See if there already exists a divider (or dividers) in this region in any
     #of the partners (or self).
     #Dividers with slightly different coordinates are common because their
@@ -4491,6 +4508,13 @@ sub copyDivider
 					     $partner_seqid,
 					     $data);
 
+	my $partner_bound = ($side ne 'left' ? undef :
+			     convertDivider($seqid,
+					    $greater_bound,
+					    $partner_pair_id,
+					    $partner_seqid,
+					    $data));
+
 	#This divider might have been copied from another sequence, so
 	#check it for a conflict before recording it
 
@@ -4508,7 +4532,8 @@ sub copyDivider
 
 		$div_map->{$partner_seqid}->{$partner_divider} =
 		  {PAIR_ID    => $pair_id,
-		   TYPE       => ($side eq 'left' ? 'SOURCE' : undef),
+		   TYPE       => ($side eq 'left' ? 'SOURCE'       : undef),
+		   HARD_STOP  => $partner_bound,
 		   STOP       => undef,
 		   IDEN_START => 0, #This will hopefully get replaced when the
 		   IDEN_STOP  => 0, #source is handled directly
@@ -4524,6 +4549,7 @@ sub copyDivider
 		  {PAIR_ID    => $partner_pair_id,
 		   TYPE       => undef,
 		   STOP       => undef,
+		   HARD_STOP  => $partner_bound,
 		   IDEN_START => 0,
 		   IDEN_STOP  => 0,
 		   SEQ        => ''};
@@ -4536,129 +4562,8 @@ sub copyDivider
 	    $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} =
 	      $partner_pair_id;
 	    $div_map->{$partner_seqid}->{$partner_divider}->{TYPE} = 'SOURCE';
-	  }
-	#I turned this portion off - should delete if I determine it's wrong or
-	#unnecessary
-	elsif(0)
-	  {
-	    #If the existing divider was copied from a different pair
-	    if($div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} ne
-	       $partner_pair_id)
-	      {
-		#If the partner being copied to is in the same pair, copy as
-		#source
-		if($partner_pair_id eq $pair_id)
-		  {
-		    #If the existing divider copied from a different pair is
-		    #marked as 'SOURCE', it's a conflict
-		    if(defined($div_map->{$partner_seqid}->{$partner_divider}
-			       ->{TYPE}) &&
-		       $div_map->{$partner_seqid}->{$partner_divider}
-		       ->{TYPE} eq 'SOURCE')
-		      {debug("Partner sequence [$partner_seqid] starting ",
-			     "at [$partner_divider] has multiple source ",
-			     "alignments [",
-			     $div_map->{$partner_seqid}->{$partner_divider}
-			     ->{PAIR_ID},
-			     "] and [$pair_id], probably because their ",
-			     "identity segments are the same across ",
-			     "multiple partner sequences.  Ignoring ",
-			     "divider [$seqid:$divider] from alignment ",
-			     "[$pair_id] to the partner sequence ",
-			     "[$partner_seqid:$partner_divider] in ",
-			     "alignment [$partner_pair_id].  This should be ",
-			     "checked manually to confirm that their ",
-			     "identity segments are encoded the same in both ",
-			     "alignments.  Even though completely ",
-			     "overlapping redundant identical segments were ",
-			     "aribtrarily removed from a sequence that was ",
-			     "aligned independently with 2 other sequences, ",
-			     "the segments still exist in the partners, ",
-			     "which will trigger the copying of the same ",
-			     "divider (from different sources) to the common ",
-			     "sequence record - and is OK - as long as it's ",
-			     "confirmed that this is what's happening.  One ",
-			     "possible complication is if the identity in ",
-			     "one pair is larger than in the other pair.  ",
-			     "The other pair's segment would have been ",
-			     "eliminated (since it was completely ",
-			     "overlapping) and its partner would copy a ",
-			     "unique divider at its start and 1 after the ",
-			     "stop, changing the source unnecessarily, but ",
-			     "since they MUST be identical anyway, it only ",
-			     "results in making it more complicated than it ",
-			     "needs to be.",{LEVEL => 3})
-			 if($side eq 'left')}
-		    #Else replace any undefined or 'recode' type with a source
-		    #type from this pair, because it's being copied from within
-		    #this pair
-		    else
-		      {
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{PAIR_ID} = $partner_pair_id;
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;
-		      }
-		  }
-		#Otherwise, copy as type recode (if existing isn't source)
-		else
-		  {
-		    #If the existing divider copied from a different pair is
-		    #not defined, update the divider as a RECODE divider
-		    if(!defined($div_map->{$partner_seqid}->{$partner_divider}
-				->{TYPE}))
-		      {
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{PAIR_ID} = $partner_pair_id;
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;
-		      }
-		    #Else - leave it as it is.  We're arbitrarily using the
-		    #first copied divider and recode source
-		  }
-	      }
-	    #Else the divider being copied over is the same as where we are
-	    #currently copying to
-	    else
-	      {
-		#If the partner being copied to is in the same pair as the one
-		#being copied from, copy as source
-		if($partner_pair_id eq $pair_id)
-		  {
-		    #If the existing divider copied from a different pair is
-		    #not defined or not marked as 'SOURCE', update it, as we
-		    #are over-writing a divider that may have been initially
-		    #created by some other means - it's probably just a
-		    #duplicate
-		    if(!defined($div_map->{$partner_seqid}->{$partner_divider}
-				->{TYPE}) ||
-		       $div_map->{$partner_seqid}->{$partner_divider}
-		       ->{TYPE} ne 'SOURCE')
-		      {
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{PAIR_ID} = $partner_pair_id;
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;
-		      }
-		    #Else no need to copy - everything is already as it should
-		    #be
-		  }
-		#Otherwise, copy as type recode
-		else
-		  {
-		    #Only copy if not defined
-		    if(!defined($div_map->{$partner_seqid}->{$partner_divider}
-				->{TYPE}))
-		      {
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{PAIR_ID} = $partner_pair_id;
-			$div_map->{$partner_seqid}->{$partner_divider}
-			  ->{TYPE} = undef;
-		      }
-		    #Else no need to copy - everything is already as it should
-		    #be or we're just going with the first one that was copied
-		  }
-	      }
+	    $div_map->{$partner_seqid}->{$partner_divider}->{HARD_STOP} =
+	      $partner_bound;
 	  }
       }
   }
@@ -4816,8 +4721,17 @@ sub dividerExists
 						    $pair_id,
 						    $seqid,
 						    $data)}
-			       $_ >= $partner_lesser &&
-				 $_ <= $partner_greater &&
+			       (#A divider falls withing the search bounds
+				($_ >= $partner_lesser &&
+				 $_ <= $partner_greater) ||
+				#A divider's range overlaps the search bounds
+				(defined($div_map->{$partner_seqid}->{$_}
+					 ->{HARD_STOP}) &&
+				 $_ < $partner_lesser &&
+				 $div_map->{$partner_seqid}->{$_}
+				 ->{HARD_STOP} >= $partner_lesser)) &&
+				   #Make sure the divider returned is inside
+				   #the original bounds
 				   ($c == 0 || ($c >= $lesser_bound &&
 						$c <= $greater_bound))}
 			 keys(%{$div_map->{$partner_seqid}})];
@@ -5066,6 +4980,8 @@ sub getPartnerPairSeqIDs
 #{PAIR_ID => $id,
 # TYPE    => 'SOURCE' or 'RECODE' (from what the partner sequence actually is),
 # STOP    => $stop,
+# HARD_STOP  => $stop,        #This is only used to make sure a RECODE divider
+                              #after a SOURCE divider (interrupting it)
 # IDEN_START => $iden_start,  #This is so we can represent the identity segs as
 # IDEN_STOP  => $iden_stop,   #capital letters
 # SEQ     => $seq} (This is what this subroutine fills in.)
