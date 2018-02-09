@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.025';
+our $VERSION = '1.026';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -4127,16 +4127,18 @@ sub getClosestLeftDivider
 		    $data,
 		    1,
 		    1);
-    #For now, we are just checking for conflicts...
-    getDividerConflict($seqid,
-		       $closest,
-		       $coord,
-		       $closest_partner->[1], #SeqID
-		       $closest_partner->[0],
-		       $divs,
-		       $data,
-		       1,
-		       1);
+
+    getFixDividerConflicts($seqid,
+			   $closest,
+			   $coord,
+			   $closest_partner->[1], #SeqID
+			   $closest_partner->[0], #PairID
+			   $divs,
+			   $data,
+			   1,
+			   1,
+			   $self_divider);
+
     if($self_divider)
       {return($self_divider,$closest)}
 
@@ -4153,15 +4155,18 @@ sub getClosestLeftDivider
 					    $data,
 					    1,
 					    0);
-	getDividerConflict($seqid,
-			   $closest,
-			   $coord,
-			   $partner->[1],
-			   $partner->[0],
-			   $divs,
-			   $data,
-			   1,
-			   0);
+
+	getFixDividerConflicts($seqid,
+			       $closest,
+			       $coord,
+			       $partner->[1],
+			       $partner->[0],
+			       $divs,
+			       $data,
+			       1,
+			       0,
+			       $partner_divider);
+
 	if($partner_divider)
 	  {return($partner_divider,$closest)}
       }
@@ -4226,6 +4231,98 @@ sub getClosestLeftDivider
       {error("Unexpected frame result.")}
 
     return($coord,$closest);
+  }
+
+sub getFixDividerConflicts
+  {
+    my $seqid         = $_[0];
+    my $lesser_bound  = $_[1];
+    my $greater_bound = $_[2];
+    my $partner_seqid = $_[3];
+    my $pair_id       = $_[4];
+    my $div_map       = $_[5];
+    my $data          = $_[6];
+    my $looking_left  = $_[7]; #looking left = creating seqid source divider
+    my $look_in_self  = $_[8];
+    my $selected_div  = $_[9];
+
+    my $success = 1;
+
+    #Check for divider conflicts and attempot to fix them, then re-check.
+    #There is likely only to be a single conflict as long as we stay on top of
+    #things, but I've coded this for the possibility that there could be
+    #multiple conflicts
+    my $tried = {};
+    while(my $bad_div = getDividerConflict($seqid,
+					   $lesser_bound,
+					   $greater_bound,
+					   $partner_seqid,
+					   $pair_id,
+					   $div_map,
+					   $data,
+					   $looking_left,
+					   $look_in_self))
+      {
+	#The bad divider will probably be defined.  I don't think the loop
+	#would be entered if it was not defined.
+	if(!defined($bad_div) ||
+	   exists($tried->{"$bad_div->{PAIR_ID}:$bad_div->{SEQID}:" .
+			   "$bad_div->{DIVIDER}"}))
+	  {
+	    if(defined($bad_div))
+	      {error("Unable to fix divider conflict: [$bad_div->{SEQID}:",
+		     "$bad_div->{DIVIDER}].")}
+	    $success = 0;
+	    last;
+	  }
+
+	debug("Bad dividers seem to be propagating [$bad_div->{PAIR_ID}:",
+	      "$bad_div->{SEQID}:$bad_div->{DIVIDER}].")
+	  if(scalar(keys(%$tried)));
+
+	#We're going to send along the existing divider if one exists, to make
+	#sure the fix addresses it specifically.
+	fixDividerConflict($seqid,
+			   $lesser_bound,
+			   $greater_bound,
+			   $partner_seqid,
+			   $pair_id,
+			   $div_map,
+			   $data,
+			   $looking_left,
+			   $look_in_self,
+			   $bad_div,
+			   $selected_div);
+
+	$tried->{"$bad_div->{PAIR_ID}:$bad_div->{SEQID}:$bad_div->{DIVIDER}"} =
+	  0;
+      }
+
+    return($success);
+  }
+
+#This will fix conflicts between the range in which a divider will be created
+#(or a pre-selected divider position) and an existing divider which overlaps
+#the proposed divider area or specific divider location
+sub fixDividerConflict
+  {
+    my $seqid         = $_[0];
+    my $lesser_bound  = $_[1];
+    my $greater_bound = $_[2];
+    my $partner_seqid = $_[3];
+    my $pair_id       = $_[4];
+    my $div_map       = $_[5];
+    my $data          = $_[6];
+    my $looking_left  = $_[7]; #looking left = creating seqid source divider
+    my $look_in_self  = $_[8];
+    my $bad_div_obj   = $_[9]; #hash with keys: SEQID, DIVIDER, & PAIR_ID
+    my $selected_div  = $_[10];
+
+
+
+
+
+
   }
 
 #Searches the segments of a solution for the closest right-side coordinate that
@@ -4391,15 +4488,17 @@ sub getClosestRightDivider
 		    $data,
 		    0,
 		    1);
-    getDividerConflict($seqid,
-		       $coord,
-		       $closest,
-		       $closest_partner->[1],
-		       $closest_partner->[0],
-		       $divs,
-		       $data,
-		       0,
-		       1);
+
+    getFixDividerConflicts($seqid,
+			   $coord,
+			   $closest,
+			   $closest_partner->[1],
+			   $closest_partner->[0],
+			   $divs,
+			   $data,
+			   0,
+			   1,
+			   $self_divider);
     if($self_divider)
       {return($self_divider,$closest)}
 
@@ -4416,15 +4515,18 @@ sub getClosestRightDivider
 					    $data,
 					    0,
 					    0);
-	getDividerConflict($seqid,
-			   $coord,
-			   $closest,
-			   $partner->[1],
-			   $partner->[0],
-			   $divs,
-			   $data,
-			   0,
-			   0);
+
+	getFixDividerConflicts($seqid,
+			       $coord,
+			       $closest,
+			       $partner->[1],
+			       $partner->[0],
+			       $divs,
+			       $data,
+			       0,
+			       0,
+			       $partner_divider);
+
 	if($partner_divider)
 	  {return($partner_divider,$closest)}
       }
@@ -4589,7 +4691,10 @@ sub copyDivider
 			 0,
 			 0))
 	  {next}
-	if(defined(getDividerConflict($seqid,
+
+	#If we can't fix any divider conflicts that would result from this
+	#copy, skip it.
+	unless(getFixDividerConflicts($seqid,
 				      $lesser_bound,
 				      $greater_bound,
 				      $partner_seqid,
@@ -4597,7 +4702,7 @@ sub copyDivider
 				      $div_map,
 				      $data,
 				      0,
-				      0)))
+				      0))
 	  {next}
 
 	my $partner_divider = convertDivider($seqid,
@@ -4712,15 +4817,17 @@ sub dividersExist
 		    $data,
 		    $looking_left,
 		    1);
-    getDividerConflict($seqid,
-		       $lesser_bound,
-		       $greater_bound,
-		       $partner_seqid,
-		       $pair_id,
-		       $div_map,
-		       $data,
-		       $looking_left,
-		       1);
+
+    getFixDividerConflicts($seqid,
+			   $lesser_bound,
+			   $greater_bound,
+			   $partner_seqid,
+			   $pair_id,
+			   $div_map,
+			   $data,
+			   $looking_left,
+			   1,
+			   $self_divider);
     if($self_divider)
       {return($self_divider)}
 
@@ -4737,15 +4844,18 @@ sub dividersExist
 					    $data,
 					    $looking_left,
 					    0);
-	getDividerConflict($seqid,
-			   $lesser_bound,
-			   $greater_bound,
-			   $partner->[1],
-			   $partner->[0],
-			   $div_map,
-			   $data,
-			   $looking_left,
-			   0);
+
+	getFixDividerConflicts($seqid,
+			       $lesser_bound,
+			       $greater_bound,
+			       $partner->[1],
+			       $partner->[0],
+			       $div_map,
+			       $data,
+			       $looking_left,
+			       0,
+			       $partner_divider);
+
 	if($partner_divider)
 	  {return($partner_divider)}
       }
@@ -5071,7 +5181,9 @@ sub getDividerConflict
 	    $divider_warnings->{$divwarnkey}->{DIVIDERS} =
 	      [@$conflicting_divs];
 
-	    return($conflicting_divs->[0]);
+	    return({SEQID   => $seqid,
+		    DIVIDER => $conflicting_divs->[0],
+		    PAIR_ID => $pair_id});
 	  }
 
 	return(undef);
@@ -5186,7 +5298,9 @@ sub getDividerConflict
 	$divider_warnings->{$divwarnkey}->{DIVIDERS} =
 	  [@$conflicting_orig_divs];
 
-	return($conflicting_orig_divs->[0]);
+	return({SEQID   => $partner_seqid,
+		DIVIDER => $conflicting_divs->[0],
+		PAIR_ID => $other_pair});
       }
 
     return(undef);
