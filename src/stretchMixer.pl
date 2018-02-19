@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.027';
+our $VERSION = '1.028';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -1157,7 +1157,7 @@ sub reCodeMerge
     my $cur_fixed_poses = $_[4];
     my $opposite_ends   = defined($_[5]) ? $_[5] : 0;
     #'opposite ends' means that the codons are edge codons of opposite sides.
-    #Knowing this alls us to select one of the 2 codons as satisfying both's
+    #Knowing this allows us to select one of the 2 codons as satisfying both's
     #identity (because one may not, e.g. GAA and GAG - If the left segment's
     #identity ends in GAA and only the G is involved in identity, but the
     #right's segment starts with GAG and only the second G is involved in
@@ -1182,6 +1182,9 @@ sub reCodeMerge
 			      ($_ ne $new_codon || $_ ne $cur_codon) :
 			      ($_ ne $new_codon && $_ ne $cur_codon)}
 		      keys(%$new_codon_hash)];
+
+    debug({LEVEL => 10},"Alt codons to: $new_codon (@$new_fixed_poses) & ",
+	  "$cur_codon (@$cur_fixed_poses): [@$alternates].");
 
     my $choices = [];
     foreach my $alt (@$alternates)
@@ -1626,7 +1629,10 @@ sub segmentFits
 		    my $tmp_codon =
 		      reCodeMerge($codon_hash,
 				  $left_codon_new,$fixed_poses_new,
-				  $left_codon_cur,$fixed_poses_cur);
+				  $left_codon_cur,$fixed_poses_cur,
+				  ($iden_start != $first_codon_start &&
+				   $rec->{IDEN_STOP} !=
+				   $rec->{LAST_CODON_STOP}));
 
 		    #If we couldn't select an alternative codon that
 		    #satisfies both sequences
@@ -1703,7 +1709,10 @@ sub segmentFits
 		    my $tmp_codon =
 		      reCodeMerge($codon_hash,
 				  $right_codon_new,$fixed_poses_new,
-				  $right_codon_cur,$fixed_poses_cur);
+				  $right_codon_cur,$fixed_poses_cur,
+				  ($iden_start != $first_codon_start &&
+				   $rec->{IDEN_STOP} !=
+				   $rec->{LAST_CODON_STOP}));
 
 		    #If we couldn't select an alternative codon that
 		    #satisfies both sequences
@@ -1746,7 +1755,9 @@ sub segmentFits
 	       $iden_start != $first_codon_start &&
 	       $rec->{IDEN_STOP} != $rec->{LAST_CODON_STOP} &&
 
-	       #the codons overlap (i.e. are in the same [frame] location)
+	       #the new segment's left edge codon and the already added
+	       #segment's right edge codon overlap (assumed to be in the same
+	       #frame)
 	       $first_codon_start == ($rec->{LAST_CODON_STOP} - 2))
 	      {
 		#The codon in the sequence being added
@@ -1827,7 +1838,9 @@ sub segmentFits
 	       $iden_stop != $last_codon_stop &&
 	       $rec->{IDEN_START} != $rec->{FIRST_CODON_START} &&
 
-	       #the codons overlap (i.e. are in the same [frame] location)
+	       #the new segment's right edge codon and the already added
+	       #segment's left edge codon overlap (assumed to be in the same
+	       #frame)
 	       ($last_codon_stop - 2) == $rec->{FIRST_CODON_START})
 	      {
 		#The codon in the sequence being added
@@ -2004,8 +2017,9 @@ sub segmentFits
 	  }
       }
 
-    return({LEFT_CODON  => ($no_left_cdn  ? undef : $alt_left_cdn),
-	    RIGHT_CODON => ($no_right_cdn ? undef : $alt_right_cdn)});
+    #If no alternate codons already in the solution, return them
+    return({LEFT_CODON  => ($no_left_cdn  ? $alt_left_cdn : undef),
+	    RIGHT_CODON => ($no_right_cdn ? $alt_right_cdn : undef)});
   }
 
 #Creates an array of hierarchical score values in the following order:
@@ -3140,8 +3154,12 @@ sub updateFinalCoords
 		      {clipSegments($lastrec,$currec)}
 		    #Else error
 		    else
-		      {error("Overlapping alternate codons encountered.  ",
-			     "Skipping.")}
+		      {
+			error("Overlapping alternate codons encountered.  ",
+			      "Skipping.")
+			  unless($lastrec->{ALT_CODON} eq
+				 $currec->{ALT_CODON});
+		      }
 		  }
 
 		#When segments are completely overlapped by other segments,
@@ -3173,8 +3191,20 @@ sub clipForAltCodon
     my $altrec = $_[0];
     my $segrec = $_[1];
 
-    #If the alternate codon overlaps the first codon and
-    #does not overlap the second codon (assumes all are in
+    if(($segrec->{FIRST_CODON_START} + 2) == $segrec->{LAST_CODON_STOP})
+      {
+	debug({LEVEL => 6},"Alternate codon overlaps a split segment edge ",
+	      "codon.  Alt codons were originally implemented before segment ",
+	      "splitting was implemented.  This is expected to happen now, ",
+	      "but a new way of dealing with this has not yet been ",
+	      "implemented.  These edge codons either need to be ignored or ",
+	      "the identity coordinates they contain must be stored ",
+	      "elsewhere (possibly inside the alt codon record itself.");
+	return();
+      }
+
+    #If the alternate codon overlaps the first codon of the segment and
+    #does not overlap the second codon (assumes everything's in
     #the same frame).  Note FINAL coords of alternate codon
     #do not change.
     if($altrec->{FINAL_START} == $segrec->{FIRST_CODON_START} &&
@@ -3246,8 +3276,8 @@ sub clipSegments
     if($seg2->{FINAL_STOP} == 0)
       {return()}
 
-    #If the stop of segment 2 occurs before the stop of segment 1, set the stop
-    #of segment 2 to 0 so that it will get eliminated
+    #If the stop of segment 2 occurs at or before the stop of segment 1 (and
+    #overlaps), set the stop of segment 2 to 0 so that it will get eliminated
     if($seg2->{IDEN_STOP} <= $seg1->{IDEN_STOP} &&
        $seg2->{IDEN_STOP} >= $seg1->{IDEN_START})
       {
@@ -4485,7 +4515,10 @@ sub getFixDividerConflicts
       }
 
 if(scalar(keys(%$tried)))
-  {debug(($success ? "Fixed" : "Failed to fix")," a ",($look_in_self ? 'self' : 'partner')," divider conflict: [",join(',',keys(%$tried)),"] [",join(',',map {defined($div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_STOP}) ? "$_->{SEQID}:$_->{DIVIDER}-$div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_START}-$div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_STOP}" : 'changed to recode'} values(%$tried)),"]!")}
+  {
+    my $msg = join('',(($success ? "Fixed" : "Failed to fix")," a ",($look_in_self ? 'self' : 'partner')," divider conflict: [",join(',',keys(%$tried)),"] [",join(',',map {defined($div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_STOP}) ? "$_->{SEQID}:$_->{DIVIDER}-$div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_START}-$div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_STOP}" : 'changed to recode'} values(%$tried)),"]!"));
+    $success ? debug($msg) : warning($msg);
+  }
 else
   {debug("No conflicts were found in search range: [$seqid:$lesser_bound-$greater_bound] with partner [$partner_seqid] from alignment [$pair_id].")}
 
@@ -6922,12 +6955,16 @@ sub validateRepairSegments
 
     my $bad_nts  = 0;
     my $bad_segs = 0;
+    my $rep_hash = {};
 
+    #We need to pre-process the positions in the hash because some duplicates
+    #can be left over because of the way ALT_CODONs were modified to work given
+    #the discovery of indirect overlap.
     foreach my $solrec (@{$soln->{$seqid}})
       {
 	my $type = $solrec->{TYPE};
 	my($expected_nts,$idlen,$idstart,$idstop,$start,$stop,$repair_nts,
-	   $len);
+	   $len,$all_nts);
 
 	if($type eq 'seg')
 	  {
@@ -6943,6 +6980,7 @@ sub validateRepairSegments
 	    $stop          = $solrec->{LAST_CODON_STOP};
 	    $len           = $stop - $start + 1;
 	    $repair_nts    = substr($source_seq,$start - 1,$len);
+	    $all_nts       = uc(substr($source_seq,$start - 1,$len));
 	  }
 	elsif($type eq 'alt')
 	  {
@@ -6960,6 +6998,7 @@ sub validateRepairSegments
 	    $stop         = $solrec->{FINAL_STOP};
 	    $len          = 3;
 	    $repair_nts   = $solrec->{ALT_CODON};
+	    $all_nts      = $solrec->{ALT_CODON};
 	  }
 
 	if(!defined($idstart) || !defined($idstop) || $idstop < $idstart)
@@ -6967,6 +7006,62 @@ sub validateRepairSegments
 	    debug("Identity start/stop invalid.");
 	    next;
 	  }
+
+	if(!exists($rep_hash->{$start}) ||
+	   ($rep_hash->{$start}->{DATA}->{TYPE} eq 'seg' && $type eq 'alt'))
+	  {$rep_hash->{$start}->{DATA} = {IDSTART => $idstart,
+					  IDSTOP  => $idstop,
+					  IDLEN   => $idlen,
+					  EXPNTS  => $expected_nts,
+					  STOP    => $stop,
+					  LEN     => $len,
+					  REPNTS  => $repair_nts,
+					  TYPE    => $type,
+					  ALLNTS  => $all_nts}}
+	else
+	  {
+	    if($type eq 'alt' &&
+	       $rep_hash->{$start}->{DATA}->{TYPE} eq 'alt' &&
+	       $expected_nts ne $rep_hash->{$start}->{DATA}->{EXPNTS})
+	      {error("Expected identity sequence conflict: [$expected_nts] ",
+		     "vs [$rep_hash->{$start}->{DATA}->{EXPNTS}] at ",
+		     "position [$seqid:$idstart-$idstop].")}
+	  }
+
+	if($len == 3)
+	  {$rep_hash->{$start}->{COUNT}->{$type}->{$all_nts}++}
+	elsif(!exists($rep_hash->{$start}->{COUNT}) ||
+	      !exists($rep_hash->{$start}->{COUNT}->{$type}))
+	  {$rep_hash->{$start}->{COUNT}->{$type}->{$all_nts} = 0}
+      }
+
+    #If there are only segment records at a position and there are multiple
+    #different codon values for that position
+    my @segconflicts = map {[$_,keys(%{$rep_hash->{$_}->{COUNT}->{seg}})]}
+      grep {my $k=$_;
+	    #A type of 'seg' exists in the count hash at this position
+	    exists($rep_hash->{$k}->{COUNT}->{seg}) &&
+	      #Only one type exists in the count hash at this position
+	      scalar(keys(%{$rep_hash->{$k}->{COUNT}})) == 1 &&
+		#The one type that's present has multiple different codons
+		scalar(grep {scalar(keys(%$_)) > 1}
+		       values(%{$rep_hash->{$k}->{COUNT}}))}
+	sort {$a <=> $b} keys(%$rep_hash);
+    if(scalar(@segconflicts))
+      {error("The following positions in the solution for [$seqid] have ",
+	     "multiple 1-codon split segment records and no alt codon ",
+	     "record: [",join(';',map {join(',',@$_)} @segconflicts),"].")}
+
+    foreach my $start (sort {$a <=> $b} keys(%$rep_hash))
+      {
+	my $idstart      = $rep_hash->{$start}->{DATA}->{IDSTART};
+	my $idstop       = $rep_hash->{$start}->{DATA}->{IDSTOP};
+	my $idlen        = $rep_hash->{$start}->{DATA}->{IDLEN};
+	my $expected_nts = $rep_hash->{$start}->{DATA}->{EXPNTS};
+	my $stop         = $rep_hash->{$start}->{DATA}->{STOP};
+	my $len          = $rep_hash->{$start}->{DATA}->{LEN};
+	my $repair_nts   = $rep_hash->{$start}->{DATA}->{REPNTS};
+	my $type         = $rep_hash->{$start}->{DATA}->{TYPE};
 
 	my $actual_nts = uc(substr($seqhash->{$seqid},$idstart - 1,$idlen));
 	my $new_bad    = 0;
@@ -7932,6 +8027,12 @@ sub loadSegments
     return(0);
   }
 
+#DEPRECATED: These warnings have been changed to debug messages.  There still
+#exist conflict and multiple divider issues that are detected, but code was
+#written to fix/deal-with conflicts, and the multiple divider issue is
+#*expected* in gappy all versus all alignment pairs (but are innocuous as well,
+#since the bad effects they used to have have been resolved as well).  There is
+#a separate error that is issued if the attempt to fix a conflict fails.
 #Globals used: $divider_warnings
 sub issueDividerWarnings
   {
@@ -7986,9 +8087,9 @@ sub issueDividerWarnings
 	    #Put the 2 warning types on separate lines so that the run report
 	    #shows them on separate lines.
 	    if($msg =~ /^Conflicting/)
-	      {warning($msg,{DETAIL => $detail . $explanation})}
+	      {debug($msg,{DETAIL => $detail . $explanation})}
 	    else
-	      {warning($msg,{DETAIL => $detail . $explanation})}
+	      {debug($msg,{DETAIL => $detail . $explanation})}
 	  }
       }
   }
