@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.028';
+our $VERSION = '1.029';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -6589,6 +6589,7 @@ sub weaveSeqs
 
     my $num_filled = 1;
     my $unfinished = 1;
+    my $unf_str    = '';
 
     my $countdowns = {map {$_ => scalar(keys(%{$map->{$_}}))} keys(%$map)};
 
@@ -6599,6 +6600,7 @@ sub weaveSeqs
 	#We will assume that this pass through the loop will complete the map
 	#unless we hit something we cannot fill in
 	$unfinished = 0;
+	$unf_str    = '';
 	#We will require that something has to have been added to the map on
 	#each iteration.
 	$num_filled = 0;
@@ -6658,6 +6660,11 @@ sub weaveSeqs
 			#the loop over after this round
 			else
 			  {
+			    $unf_str .= ($unfinished ? ',' : '');
+			    $unf_str .= "$seqid:$divider-" .
+			      $map->{$seqid}->{$divider}->{STOP} .
+				" (based on " .
+				  $map->{$seqid}->{$divider}->{PAIR_ID} . ")";
 			    $unfinished++;
 			    verboseOverMe("Sourcing.  Unfinished segments: [",
 					  join(' ',map {"$_:$countdowns->{$_}"}
@@ -6705,9 +6712,11 @@ sub weaveSeqs
 	    "] Done");
 
     if($unfinished)
-      {error("Unexpected case.  Unable to determine which alignment every ",
-	     "segment of sequence (that will not be recoded) should come ",
-	     "from.  $unfinished segments left unsourced.")}
+      {error("Unable to fill in sequence for [$unfinished] segments.  Unable ",
+	     "to determine which alignment every segment of sequence should ",
+	     "either be sourced from directly, or the basis for recoding (if ",
+	     "it aligned to a stretch of identity with another sequence).",
+	     {DETAIL => "Unfinished segments: [$unf_str]"})}
 
     #Assign letter codes to each sequence
     my $curcode     = 'a';
