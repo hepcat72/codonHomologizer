@@ -11,14 +11,14 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.029';
+our $VERSION = '1.030';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
               AUTHOR  => 'Robert William Leach',
               CONTACT => 'rleach@princeton.edu',
               COMPANY => 'Princeton University',
-              LICENSE => 'Copyright 2017',
+              LICENSE => 'Copyright 2018',
               HELP    => << 'END_HELP'
 
 This script, given a series of pairwise aligned nucleotide fasta files produced by codonHomologizer.pl, will identify identical homologous subsequences of length N (N=11 is the default) in each submitted alignment pair and select stretches from each alignment (that do not conflict*) and produce 1 sequence for each sequence involved in the submitted alignment pairs that is a hybrid of all the sequences it was paired with, without changing the amino acids encoded.  The goal is to maximize homologous recombination opportunities between all pairs submitted.  This is based on the premise that crossovers occur best when contiguous identity is > 10nts^.
@@ -3360,10 +3360,14 @@ sub clipSegments
 	    elsif($seg2->{IDEN_STOP} > $seg1->{IDEN_STOP})
 	      {
 		#If there is current overlap
-		if($seg2->{FINAL_START} <= $seg1->{FINAL_STOP})
+		if($seg2->{IDEN_START} <= $seg1->{IDEN_STOP})
 		  {
-		    $seg1->{FINAL_STOP}  = $seg1->{LAST_CODON_STOP} - 3;
-		    $seg2->{FINAL_START} = $seg2->{LAST_CODON_STOP} - 2;
+		    $seg1->{FINAL_STOP}        = $seg1->{LAST_CODON_STOP} - 3;
+		    $seg1->{IDEN_STOP}         = $seg1->{FINAL_STOP};
+		    $seg1->{LAST_CODON_STOP}   = $seg1->{FINAL_STOP};
+		    $seg2->{FINAL_START}       = $seg2->{LAST_CODON_STOP} - 2;
+		    $seg2->{IDEN_START}        = $seg2->{FINAL_START};
+		    $seg2->{FIRST_CODON_START} = $seg2->{FINAL_START};
 		  }
 	      }
 
@@ -3617,8 +3621,13 @@ sub createLeftDividers
 	    if(!defined($divider_left))
 	      {$divider_left = 1}
 
-	    #Now let's check the divider that we're going to add for conflicts it may have with a pre-existing divider.
-	    #If the divider extends more than a codon in length...  We're going to re-use the dividerExists code to search for conflicts.  Existing dividers at the divider location or 1 after the stop of this segment are OK.  We want to find anything in between that would be a problem.  So if the divider is only
+	    #Now let's check the divider that we're going to add for conflicts
+	    #it may have with a pre-existing divider.
+	    #If the divider extends more than a codon in length...  We're going
+	    #to re-use the dividerExists code to search for conflicts.
+	    #Existing dividers at the divider location or 1 after the stop of
+	    #this segment are OK.  We want to find anything in between that
+	    #would be a problem.  So if the divider is only
 	    my $overlapping_divs = [];
 	    if(($divider_left + 2) != $rec->{FINAL_STOP})
 	      {
@@ -3633,19 +3642,10 @@ sub createLeftDividers
 						    1));
 
 		if(scalar(@$overlapping_divs))
-		  {warning("New conflicting dividers ([",
-			   scalar(@$overlapping_divs),
-			   "] of them) detected at [$seqid:$divider_left].")}
+		  {debug("New conflicting dividers ([",
+			 scalar(@$overlapping_divs),
+			 "] of them) detected at [$seqid:$divider_left].")}
 	      }
-
-#	    my $dividers_exist = dividersExist($seqid,
-#					       $closest_left,
-#					       $rec->{FINAL_START},
-#					       $div_map,
-#					       $data,
-#					       1,
-#					       $partners,
-#					       $rec->{PAIR_ID});
 
 	    #This divider might have been copied from another sequence, so
 	    #check it for a conflict before recording it
@@ -3722,9 +3722,6 @@ sub createLeftDividers
 		      "for $seqid from $rec->{PAIR_ID} with identity coords ",
 		      "$rec->{IDEN_START}-$rec->{IDEN_STOP}");
 
-#if($dividers_exist && (!exists($div_map->{$seqid}) || !exists($div_map->{$seqid}->{$divider_left})))
-#  {warning("SANITY CHECK 1: OVERWRITING EXISTING DIVIDER: [$dividers_exist].")}
-
 		$div_map->{$seqid}->{$divider_left} =
 		  {PAIR_ID    => $rec->{PAIR_ID},
 		   TYPE       => 'SOURCE',
@@ -3789,16 +3786,6 @@ sub createLeftDividers
 					$partner_seqid,
 					$data),"].")}
 	      }
-
-	    #Now let's check the divider that was just added for conflicts it may have with a pre-existing divider.
-#	    my $dividers_exist = dividersExist($seqid,
-#					       $closest_left,
-#					       $rec->{FINAL_START},
-#					       $div_map,
-#					       $data,
-#					       1,
-#					       $partners,
-#					       $rec->{PAIR_ID});
 
 	    #Copy this divider to the partner sequences
 	    copyDivider($divider_left,
@@ -3928,20 +3915,6 @@ sub createRightDividers
 				     $data,
 				     $partners,
 				     $div_map);
-
-#	    my $dividers_exist = dividersExist($seqid,
-#					       $rec->{FINAL_STOP},
-#					       $closest_right,
-#					       $div_map,
-#					       $data,
-#					       0,
-#					       $partners,
-#					       (exists($div_map->{$seqid}) &&
-#						exists($div_map->{$seqid}
-#						       ->{$divider_right}) ?
-#						$div_map->{$seqid}
-#						->{$divider_right}->{PAIR_ID} :
-#						$rec->{PAIR_ID}));
 
 	    #If the returned divider is indefined and we're at the end of the
 	    #ordered segments, set the default as just after the end of the
@@ -4434,12 +4407,32 @@ sub getFixDividerConflicts
 	  {
 	    if(defined($bad_div))
 	      {
-		my $other_seqid = getPartnerSeqID($bad_div->{SEQID},$bad_div->{PAIR_ID},$data);
+		my $other_seqid =
+		  getPartnerSeqID($bad_div->{SEQID},$bad_div->{PAIR_ID},$data);
 	       error("Unable to fix ",($look_in_self ? 'self' : 'partner'),
 		     " divider conflict: [$bad_div->{SEQID}:",
-		     "$bad_div->{DIVIDER}] that ends at [$div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}->{HARD_START}-$div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}->{HARD_STOP}] and overlaps self-range [$seqid:$lesser_bound-$greater_bound] when trying to create a [$seqid:",($look_in_self ? ($looking_left ? 'source' : 'recode') : 'unknown'),
-		     '] divider while looking [',($looking_left ? 'left' : 'right'),'], which interrupts a [',"$bad_div->{SEQID}:$bad_div->{DIVIDER}-$div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}->{HARD_STOP}:",(defined($div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}->{TYPE}) ? $div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}->{TYPE} : 'recode'),"] divider.  The search range is based on bounding segments in [$seqid] and [",(defined($from_seqid) ? "$from_seqid in $from_pairid" : 'unknown'),"].",
-		     {DETAIL => "Alignment that determines where the conflicting divider comes from:\n" .
+		     "$bad_div->{DIVIDER}] that ends at [",
+		     $div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}
+		     ->{HARD_START},"-",
+		     $div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}
+		     ->{HARD_STOP},"] and overlaps self-range [$seqid:",
+		     "$lesser_bound-$greater_bound] when trying to create a ",
+		     "[$seqid:",
+		     ($look_in_self ? ($looking_left ? 'source' : 'recode') :
+		      'unknown'),'] divider while looking [',
+		     ($looking_left ? 'left' : 'right'),'], which interrupts ',
+		     'a [',"$bad_div->{SEQID}:$bad_div->{DIVIDER}-",
+		     $div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}
+		     ->{HARD_STOP},":",
+		     (defined($div_map->{$bad_div->{SEQID}}
+			      ->{$bad_div->{DIVIDER}}->{TYPE}) ?
+		      $div_map->{$bad_div->{SEQID}}->{$bad_div->{DIVIDER}}
+		      ->{TYPE} : 'recode'),"] divider.  The search range is ",
+		     "based on bounding segments in [$seqid] and [",
+		     (defined($from_seqid) ? "$from_seqid in $from_pairid" :
+		      'unknown'),"].",
+		     {DETAIL => "Alignment that determines where the " .
+		      "conflicting divider comes from:\n" .
 		      getAlnSnippet($bad_div->{SEQID},
 				    $bad_div->{DIVIDER},
 				    $div_map->{$bad_div->{SEQID}}
@@ -4467,9 +4460,9 @@ sub getFixDividerConflicts
 						       ->{HARD_STOP},
 						       $bad_div->{PAIR_ID},
 						       $other_seqid,
-						       $data)) . "\n\n"
- .
-		      "Alignment showing the partner where the conflicting divider will be copied:\n" .
+						       $data)) . "\n\n" .
+		      "Alignment showing the partner where the conflicting " .
+		      "divider will be copied:\n" .
 		      getAlnSnippet($seqid,
 				    $lesser_bound,
 				    $greater_bound,
@@ -4508,19 +4501,36 @@ sub getFixDividerConflicts
 			   $div_map,
 			   $data,
 			   $look_in_self, #Whether we're fixing self or partner
+			   $looking_left,
 			   $bad_div);
 
 	$tried->{"$bad_div->{PAIR_ID}:$bad_div->{SEQID}:$bad_div->{DIVIDER}"} =
 	  $bad_div;
       }
 
-if(scalar(keys(%$tried)))
-  {
-    my $msg = join('',(($success ? "Fixed" : "Failed to fix")," a ",($look_in_self ? 'self' : 'partner')," divider conflict: [",join(',',keys(%$tried)),"] [",join(',',map {defined($div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_STOP}) ? "$_->{SEQID}:$_->{DIVIDER}-$div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_START}-$div_map->{$_->{SEQID}}->{$_->{DIVIDER}}->{HARD_STOP}" : 'changed to recode'} values(%$tried)),"]!"));
-    $success ? debug($msg) : warning($msg);
-  }
-else
-  {debug("No conflicts were found in search range: [$seqid:$lesser_bound-$greater_bound] with partner [$partner_seqid] from alignment [$pair_id].")}
+    if(scalar(keys(%$tried)))
+      {
+	my $msg =
+	  join('',(($success ? "Fixed" : "Failed to fix")," a ",
+		   ($look_in_self ? 'self' : 'partner')," divider conflict: [",
+		   join(',',keys(%$tried)),"] [",
+		   join(',',map {defined($div_map->{$_->{SEQID}}
+					 ->{$_->{DIVIDER}}->{HARD_STOP}) ?
+					   "$_->{SEQID}:$_->{DIVIDER}-" .
+					     $div_map->{$_->{SEQID}}
+					       ->{$_->{DIVIDER}}->{HARD_START}
+						 . "-" .
+						   $div_map->{$_->{SEQID}}
+						     ->{$_->{DIVIDER}}
+						       ->{HARD_STOP} :
+							 'changed to recode'}
+			values(%$tried)),"]!"));
+	$success ? debug($msg) : warning($msg);
+      }
+    else
+      {debug("No conflicts were found in search range: [$seqid:$lesser_bound-",
+	     "$greater_bound] with partner [$partner_seqid] from alignment ",
+	     "[$pair_id].")}
 
     return($success);
   }
@@ -4538,43 +4548,9 @@ sub fixDividerConflict
     my $div_map       = $_[5];
     my $data          = $_[6];
     my $look_in_self  = $_[7];
-    my $bad_div_obj   = $_[8]; #hash with keys: SEQID, DIVIDER, & PAIR_ID
+    my $looking_left  = $_[8];
+    my $bad_div_obj   = $_[9]; #hash with keys: SEQID, DIVIDER, & PAIR_ID
 
-    #We're fixing a divider in the partner, which may or may not be a source
-    #divider
-    if(!$look_in_self)
-      {
-	#This is the only reason for passing the partner_seqid
-
-	$lesser_bound  = convertDivider($seqid,
-					$lesser_bound,
-					$pair_id,
-					$partner_seqid,
-					$data);
-	$greater_bound = convertDivider($seqid,
-					$greater_bound,
-					$pair_id,
-					$partner_seqid,
-					$data);
-	$seqid = $partner_seqid;
-
-	#The divider in the bad_div_obj should be the partner
-	if($bad_div_obj->{SEQID} ne $seqid)
-	  {error("Bad sequence ID in the bad divider object.  It doesn't ",
-		 "match the partner sequence ID.")}
-      }
-
-    #Error-check that the divider is in the same sequence as the one with the
-    #conflicting search range
-    if($seqid ne $bad_div_obj->{SEQID})
-      {
-	error("Conflicting divider is from a different sequence ",
-	      "[$bad_div_obj->{SEQID}] than the one we are searching for ",
-	      "conflicts in [$seqid].");
-	return();
-      }
-
-debug("1");
     #We are assuming that only source dividers (i.e. with hard starts/stops)
     #will get in here, because getDividerConflict only finds conflicts for
     #these dividers.  But, we should make sure that the divider conflict object
@@ -4597,11 +4573,86 @@ debug("1");
     my $old_iden_stop   = $div_map->{$conflict_seqid}->{$old_divider}
       ->{IDEN_STOP};
 
+    my $partner_updated = 0;
+
+    #We're fixing a divider in the partner, which may or may not be a source
+    #divider
+    if(!$look_in_self)
+      {
+	#This block is the only reason for passing the partner_seqid
+
+	$lesser_bound  = convertDivider($seqid,
+					$lesser_bound,
+					$pair_id,
+					$partner_seqid,
+					$data);
+	$greater_bound = convertDivider($seqid,
+					$greater_bound,
+					$pair_id,
+					$partner_seqid,
+					$data);
+	$seqid = $partner_seqid;
+
+	#The divider in the bad_div_obj should be the partner
+	if($bad_div_obj->{SEQID} ne $seqid)
+	  {error("Bad sequence ID in the bad divider object.  It doesn't ",
+		 "match the partner sequence ID.")}
+
+	if($div_map->{$conflict_seqid}->{$old_divider}->{PAIR_ID} ne
+	   $conflict_pairid)
+	  {
+	    error("The pair ID that getDividerConflict put in the ",
+		  "bad divider object does not match what was found ",
+		  "in the divider map while processing the partner.");
+	  }
+      }
+    elsif($div_map->{$conflict_seqid}->{$old_divider}->{PAIR_ID} ne
+	  $conflict_pairid)
+      {
+	error("The pair ID that getDividerConflict put in the ",
+	      "bad divider object does not match what was found ",
+	      "in the divider map while processing self.");
+      }
+
+    my $conflict_with_self = 0;
+    #If the conflicting source divider we found and the source divider we
+    #are seeking to create in the search region are each being created
+    #while looking left of the same segment from the same alignment, then
+    #it's a "conflict with self".  When the first version of the divider
+    #was created, it did not find a closer segment and created a divider
+    #far off to the left.  Then, while looking left of the same segment in
+    #the partner, we find a closer segment with a sequence with which the
+    #first sequence was never aligned.  This must be handled differently
+    #from a conflict from a different pair.
+    #I shouldn't need to check that hard start == greater bound, but it doesn't
+    #hurt.
+    if($looking_left && $conflict_pairid eq $pair_id &&
+       $hard_start == $greater_bound)
+      {
+	debug("Conflict with self detected in [$pair_id].  Conflicting ",
+	      "divider: [$conflict_seqid:$old_divider-$hard_start-",
+	      "$hard_stop].  Looking in self [$seqid] for a divider in the ",
+	      "range: [$seqid:$lesser_bound-$greater_bound].  The greater ",
+	      "bound should equal the hard start: [$greater_bound == ",
+	      "$hard_start ? ",($greater_bound == $hard_start ? 'YES' : 'NO'),
+	      "].");
+	$conflict_with_self = 1;
+      }
+
+    #Error-check that the divider is in the same sequence as the one with the
+    #conflicting search range
+    if($seqid ne $bad_div_obj->{SEQID})
+      {
+	error("Conflicting divider is from a different sequence ",
+	      "[$bad_div_obj->{SEQID}] than the one we are searching for ",
+	      "conflicts in [$seqid].");
+	return();
+      }
+
     #1. If the HARD START of the conflicting divider occurs after the
     #   conflicting search range start
     if($hard_start > $lesser_bound)
       {
-debug("2");
 	#If the divider is not already at the hard start
 	if($old_divider != $hard_start)
 	  {
@@ -4609,16 +4660,20 @@ debug("2");
 	    ## Move the conflicting divider right-ward
 	    ##
 
-debug("3");
 	    #1.1. If the hard start <= the end of the search range
 	    if($hard_start <= $greater_bound)
 	      {
+                #If this is a conflict with self
+                if($conflict_with_self)
+                  {
+		    #Mark the divider to be changed to undef/recode
+		    $new_divider = undef;
+		  }
 		#Make sure we're not copying over something (which should not
-debug("4");
 		#happen)
-		if(!exists($div_map->{$bad_div_obj->{SEQID}}->{$hard_start}))
+		elsif(!exists($div_map->{$bad_div_obj->{SEQID}}
+			      ->{$hard_start}))
 		  {
-debug("5");
 		    #1.1.1. Copy the conflicting divider to its hard start
 		    $new_divider = $hard_start;
 		    $div_map->{$bad_div_obj->{SEQID}}->{$new_divider} =
@@ -4652,7 +4707,6 @@ debug("5");
 	    #1.2. Else (the hard start > the end of the search range)
 	    else
 	      {
-debug("6");
 		#Make sure the end of the search range is in frame 1
 		if(calcFrame($greater_bound) != 1)
 		  {error("Larger search bound must be in frame 1.")}
@@ -4682,7 +4736,6 @@ debug("6");
 		elsif(!exists($div_map->{$bad_div_obj->{SEQID}}
 			      ->{$greater_bound}))
 		  {
-debug("7");
 		    #1.2.1. Copy the conflicting divider to the end of the
 		    #       search range (making sure it's in frame 1 of
 		    #       course)
@@ -4706,11 +4759,17 @@ debug("7");
 	#     start of the search range
 	if($old_divider >= $lesser_bound)
 	  {
-debug("8");
 	    #1.3.1. If the old divider was copied to a new location above
-	    if($old_divider != $new_divider)
+	    if(defined($new_divider) && $old_divider != $new_divider)
 	      {
-debug("9");
+		#I check new_divider's defined state above, but given earlier
+		#code, it should always be defined here.  Conflicts with self
+		#(which cause the undefined new divider only occur here when
+		#the old divider is less than or equal to the lesser bound
+
+                #This is called to simply check that $partner_pair_id is valid
+	        getPartnerSeqID($bad_div_obj->{SEQID},$pair_id,$data);
+
 		#1.3.1.1. Change the original conflicting divider to undef/
 		#         recode using the pair_id that is the source for the
 		#         search range.  It will be selected as an existing
@@ -4727,7 +4786,7 @@ debug("9");
 		  ->{IDEN_START} = 0;
 		$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
 		  ->{IDEN_STOP} = 0;
-debug("THIS SHOULD HAPPEN JUST BEFORE THE FIRST ERROR.  CONFLICT: [$bad_div_obj->{SEQID}:$old_divider].  UPDATING CONFLICT'S PARTNER: [$conf_part_seqid] and the conflicting original divider should have had its hard start set to undef");
+
 		#Add/edit the conflicting source divider's partner divider
 		updatePartnerSourceDivider($bad_div_obj->{SEQID},
 					   $old_divider,
@@ -4737,6 +4796,8 @@ debug("THIS SHOULD HAPPEN JUST BEFORE THE FIRST ERROR.  CONFLICT: [$bad_div_obj-
 					   $div_map,
 					   $div_map->{$bad_div_obj->{SEQID}}
 					   ->{$old_divider});
+
+                $partner_updated = 1;
 	      }
 	    #1.3.2. Else nothing (leave the original divider alone)
 	  }
@@ -4744,11 +4805,9 @@ debug("THIS SHOULD HAPPEN JUST BEFORE THE FIRST ERROR.  CONFLICT: [$bad_div_obj-
 	#     of the search range)
 	else
 	  {
-debug("10");
 	    #If the divider changed
-	    if($old_divider != $new_divider)
+	    if(!defined($new_divider) || $old_divider != $new_divider)
 	      {
-debug("11");
 		#1.4.1. Change it to a recode divider using the source
 		#       alignment it already had
 		$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{TYPE} =
@@ -4771,6 +4830,17 @@ debug("11");
 					   $div_map,
 					   $div_map->{$bad_div_obj->{SEQID}}
 					   ->{$old_divider});
+
+                $partner_updated = 1;
+
+                #Just let a new divider be selected in the search range and let
+                #it copy back to the partner as it would have had it been found
+                #first.  We get here when the search range, looking left of a
+                #partner is smaller than looking left of the original due to a
+                #segment the partner has found that's closer that the original
+                #never aligned with
+                if(!defined($new_divider))
+		  {return()}
 	      }
 
 	    #1.4.2. Duplicate the source divider to every (hard start to hard
@@ -4848,7 +4918,24 @@ debug("11");
 		      }
 		    else
 		      {
-			my $msg = join('',("Encountered a ",(defined($div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE}) && $div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE} eq 'SOURCE' ? 'source' : 'recode')," divider [$bad_div_obj->{SEQID}:$src_div] overlapping a source divider from ",($div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{PAIR_ID} eq $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{PAIR_ID} ? 'the same' : 'a different')," alignment [$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{PAIR_ID}] vs [$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{PAIR_ID}]."));
+			my $msg =
+			  join('',("Encountered a ",
+				   (defined($div_map->{$bad_div_obj->{SEQID}}
+					    ->{$src_div}->{TYPE}) &&
+				    $div_map->{$bad_div_obj->{SEQID}}
+				    ->{$src_div}->{TYPE} eq 'SOURCE' ?
+				    'source' : 'recode')," divider ",
+				   "[$bad_div_obj->{SEQID}:$src_div] ",
+				   "overlapping a source divider from ",
+				   ($div_map->{$bad_div_obj->{SEQID}}
+				    ->{$src_div}->{PAIR_ID} eq
+				    $div_map->{$bad_div_obj->{SEQID}}
+				    ->{$old_divider}->{PAIR_ID} ?
+				    'the same' : 'a different')," alignment [",
+				   $div_map->{$bad_div_obj->{SEQID}}
+				   ->{$src_div}->{PAIR_ID},"] vs [",
+				   $div_map->{$bad_div_obj->{SEQID}}
+				   ->{$old_divider}->{PAIR_ID},"]."));
 			if($div_map->{$bad_div_obj->{SEQID}}->{$src_div}
 			   ->{PAIR_ID} eq
 			   $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
@@ -4937,7 +5024,38 @@ debug("11");
     #   conflicting search range start)
     else
       {
-debug("12");
+	#If this is a conflict with self (in which case the lesser bound and
+	#greater bound must each equal the hard start and the old divider must
+	#be less than all of them), set the new divider to undef/recode
+	if($hard_start == $lesser_bound && $hard_start == $greater_bound &&
+	   $conflict_with_self && $old_divider < $hard_start)
+	  {
+	    $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{TYPE} =
+	      undef;
+	    $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
+	      ->{HARD_START} = undef;
+	    $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
+	      ->{HARD_STOP} = undef;
+	    $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
+	      ->{IDEN_START} = 0;
+	    $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
+	      ->{IDEN_STOP} = 0;
+
+	    #Propagate the change back to the prior location in the partner
+	    updatePartnerSourceDivider($bad_div_obj->{SEQID},
+				       $old_divider,
+				       $conflict_pairid,
+				       $conf_part_seqid,
+				       $data,
+				       $div_map,
+				       $div_map->{$bad_div_obj->{SEQID}}
+				       ->{$old_divider});
+
+	    $partner_updated = 1;
+
+	    return();
+	  }
+
 	#2.1. Duplicate the source divider to every overlapping (hard start to
 	#     hard stop) frame 1 position within the search range to protect
 	#     those positions, (or we could somehow return the fact that the
@@ -5012,7 +5130,38 @@ debug("12");
 		  }
 		else
 		  {
-		    my $msg = join('',("Encountered a ",(defined($div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE}) && $div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE} eq 'SOURCE' ? 'source' : 'recode')," divider [$bad_div_obj->{SEQID}:$src_div",(defined($div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE}) && $div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE} eq 'SOURCE' ? "-$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{HARD_START}-$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{HARD_STOP}" : ''),"] while splitting another source divider [$bad_div_obj->{SEQID}:$old_divider-$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{HARD_START}-$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{HARD_STOP}] for overlap from ",($div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{PAIR_ID} eq $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{PAIR_ID} ? 'the same' : 'a different')," alignment [encountered:$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{PAIR_ID}] vs [splitting:$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{PAIR_ID}]."));
+		    my $msg =
+		      join('',("Encountered a ",
+			       (defined($div_map->{$bad_div_obj->{SEQID}}
+					->{$src_div}->{TYPE}) &&
+				$div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+				->{TYPE} eq 'SOURCE' ? 'source' : 'recode'),
+			       " divider [$bad_div_obj->{SEQID}:$src_div",
+			       (defined($div_map->{$bad_div_obj->{SEQID}}
+					->{$src_div}->{TYPE}) &&
+				$div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+				->{TYPE} eq 'SOURCE' ?
+				"-" . $div_map->{$bad_div_obj->{SEQID}}
+				->{$src_div}->{HARD_START} . "-" .
+				$div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+				->{HARD_STOP} : ''),"] while splitting ",
+			       "another source divider [$bad_div_obj->{SEQID}",
+			       ":",
+			       $old_divider-$div_map->{$bad_div_obj->{SEQID}}
+			       ->{$old_divider}->{HARD_START},"-",
+			       $div_map->{$bad_div_obj->{SEQID}}
+			       ->{$old_divider}->{HARD_STOP},"] for overlap ",
+			       "from ",
+			       ($div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+				->{PAIR_ID} eq
+				$div_map->{$bad_div_obj->{SEQID}}
+				->{$old_divider}->{PAIR_ID} ?
+				'the same' : 'a different')," alignment ",
+			       "[encountered:",
+			       $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+			       ->{PAIR_ID},"] vs [splitting:",
+			       $div_map->{$bad_div_obj->{SEQID}}
+			       ->{$old_divider}->{PAIR_ID},"]."));
 		    if(defined($div_map->{$bad_div_obj->{SEQID}}->{$src_div}
 			       ->{TYPE}) &&
 		       $div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{TYPE} eq
@@ -5023,7 +5172,16 @@ debug("12");
 		       ->{PAIR_ID})
 		      {
 			warning($msg);
-			debug("The pre-existing alignment used to source [$bad_div_obj->{SEQID}:$src_div-$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{HARD_STOP}] ($div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{PAIR_ID}).  The identity coordinates [$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{IDEN_START}-$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{IDEN_STOP}] have been capitalized:\n",
+			debug("The pre-existing alignment used to source ",
+			      "[$bad_div_obj->{SEQID}:$src_div-",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+			      ->{HARD_STOP},"] (",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+			      ->{PAIR_ID},").  The identity coordinates [",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+			      ->{IDEN_START},"-",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+			      ->{IDEN_STOP},"] have been capitalized:\n",
 			      getAlnSnippet($bad_div_obj->{SEQID},
 					    $src_div,
 					    $div_map->{$bad_div_obj->{SEQID}}
@@ -5049,7 +5207,21 @@ debug("12");
 							    ->{$src_div}
 							    ->{IDEN_STOP}),
 					    $data),"\n\n",
-			      "The alignment we want to use to source [$bad_div_obj->{SEQID}:$src_div-$div_map->{$bad_div_obj->{SEQID}}->{$src_div}->{HARD_STOP}] ($div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{PAIR_ID}) - The portion of the pre-existing identity coords [$div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{IDEN_START}-",($new_hard_stop < $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{IDEN_STOP} ? $new_hard_stop : $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}->{IDEN_STOP}),"] we intend to replace have been capitalized:\n",
+			      "The alignment we want to use to source ",
+			      "[$bad_div_obj->{SEQID}:$src_div-",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+			      ->{HARD_STOP},"] (",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
+			      ->{PAIR_ID},") - The portion of the pre-",
+			      "existing identity coords [",
+			      $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
+			      ->{IDEN_START},"-",
+			      ($new_hard_stop <
+			       $div_map->{$bad_div_obj->{SEQID}}
+			       ->{$old_divider}->{IDEN_STOP} ? $new_hard_stop :
+			       $div_map->{$bad_div_obj->{SEQID}}
+			       ->{$old_divider}->{IDEN_STOP}),"] we intend ",
+			      "to replace have been capitalized:\n",
 			      getAlnSnippet($bad_div_obj->{SEQID},
 					    $src_div,
 					    $new_hard_stop,
@@ -5182,9 +5354,8 @@ debug("12");
       }
 
     #If the old divider changed, copy the changes to the source partner
-    if($old_divider != $new_divider)
+    if(!$partner_updated && $old_divider != $new_divider)
       {
-debug("13");
 	#Add/edit the conflicting source divider's partner divider
 	updatePartnerSourceDivider($bad_div_obj->{SEQID},
 				   $old_divider,
@@ -5228,8 +5399,163 @@ sub updatePartnerSourceDivider
 		     $part_seqid,
 		     $data);
 
+    #If the divider didn't convert properly due to a gap or weird overlap
+    #issue, try to find it
+    if(!exists($div_map->{$part_seqid}) ||
+       !exists($div_map->{$part_seqid}->{$part_divider}))
+      {
+	my $tmp_part_divider =
+	  convertAlnSeqCoord($seqid,
+			     $divider,
+			     $pair_id,
+			     $part_seqid,
+			     $data);
+	if(calcFrame($tmp_part_divider) == 3)
+	  {$tmp_part_divider++}
+	if(calcFrame($tmp_part_divider) == 1)
+	  {
+	    #Now, if we can convert back and get the same coord, it's confirmed
+	    my $check_div = convertDivider($part_seqid,
+					   $tmp_part_divider,
+					   $pair_id,
+					   $seqid,
+					   $data);
+	    if($check_div != $divider)
+	      {$check_div = convertAlnSeqCoord($part_seqid,
+					       $tmp_part_divider,
+					       $pair_id,
+					       $seqid,
+					       $data)}
+	    if($check_div == $divider)
+	      {$part_divider = $tmp_part_divider}
+	  }
+      }
+
+    if(exists($div_map->{$part_seqid}) &&
+       exists($div_map->{$part_seqid}->{$part_divider}) &&
+       !defined($div_map->{$part_seqid}->{$part_divider}->{PAIR_ID}))
+      {warning("Source partner [$part_seqid:$part_divider] to [$seqid:",
+	       "$divider] doesn't have a defined pair ID in the map.  ",
+	       "Overwriting source divider change created for ",
+	       "[$div_hash->{PAIR_ID}] and converted using [$pair_id].")}
+    elsif(exists($div_map->{$part_seqid}) &&
+	  exists($div_map->{$part_seqid}->{$part_divider}) &&
+	  $div_hash->{PAIR_ID} ne
+	  $div_map->{$part_seqid}->{$part_divider}->{PAIR_ID} &&
+	  defined($div_map->{$part_seqid}->{$part_divider}->{TYPE}) &&
+	  $div_map->{$part_seqid}->{$part_divider}->{TYPE} eq 'SOURCE')
+      {
+	#This can legitimately happen when 1 sequence has overlapping identity
+	#segments with 2 other sequences that do not overlap one another.  The
+	#common sequence's segments get adjusted to cover all identity, but the
+	#partner sequence's do not.  If they run into a divider conflict, they
+	#will try and move their divider, but since the segment's start or stop
+	#may have been adjusted to accommodate the overlap, the divider
+	#encountered could be from a different pair.
+
+	#If the divider we've adjusted (previously) extends over a larger
+	#region, we'll allow the overwrite with a warning
+	if($div_hash->{IDEN_STOP} >
+	   $div_map->{$part_seqid}->{$part_divider}->{IDEN_STOP})
+	  {
+	    #We only need to warn about the adjustment being done if either
+	    #the adjusting divider or the unexpected divider are not equal to
+	    #their hard start
+	    if($divider != $div_hash->{HARD_START} ||
+	       $part_divider !=
+	       $div_map->{$part_seqid}->{$part_divider}->{HARD_START})
+	      {warning("The source partner has a different pair ID [",
+		       $div_map->{$part_seqid}->{$part_divider}->{PAIR_ID},
+		       "] than the one that was moved in the partner: ",
+		       "[$div_hash->{PAIR_ID}].",
+		       {DETAIL =>
+			join('',("Divider found: [$part_seqid:$part_divider].",
+				 "  Conflicting divider: [$seqid:$divider].  ",
+				 "This can be caused by a pair of ",
+				 "overlapping identity segments one sequence ",
+				 "has with 2 other sequences, which causes ",
+				 "potential collisions such as this one.  ",
+				 "Keeping the adjusted larger/longer ",
+				 "segment."))})}
+	  }
+	#If the divider we've adjusted (previously) extends over a smaller
+	#region, we'll skip the overwrite with a warning
+	elsif($div_hash->{IDEN_STOP} <
+	      $div_map->{$part_seqid}->{$part_divider}->{IDEN_STOP})
+	  {
+	    #We only need to warn about the adjustment not being done if either
+	    #the adjusting divider or the unexpected divider are not equal to
+	    #their hard start
+	    if($divider != $div_hash->{HARD_START} ||
+	       $part_divider !=
+	       $div_map->{$part_seqid}->{$part_divider}->{HARD_START})
+	      {warning("The source partner has a different pair ID [",
+		       $div_map->{$part_seqid}->{$part_divider}->{PAIR_ID},
+		       "] than the one that was moved in the partner: ",
+		       "[$div_hash->{PAIR_ID}].",
+		       {DETAIL =>
+			join('',("Divider found: [$part_seqid:$part_divider].",
+				 "  Conflicting divider: [$seqid:$divider].  ",
+				 "This can be caused by a pair of ",
+				 "overlapping identity segments one sequence ",
+				 "has with 2 other sequences, which causes ",
+				 "potential collisions such as this one.  ",
+				 "Keeping the original larger/longer ",
+				 "segment."))})}
+	    return();
+	  }
+	#Else the region is the same length, so we'll quietly skip it
+      }
+    #If we have not gotten to this sequence yet, let it quietly find the
+    #adjusted partner divider
+    elsif(!exists($div_map->{$part_seqid}))
+      {return()}
+    #If the expected partner source divider doesn't exist in the expected
+    #place, make sure adjusting it won't cause a problem
+    elsif(!exists($div_map->{$part_seqid}->{$part_divider}))
+      {
+	if((!defined($div_hash->{HARD_START}) ||
+	    $divider != $div_hash->{HARD_START}) && isDebug())
+	  {warning("Source divider [$seqid:$divider] doesn't exist in the ",
+		   "partner's map in the expected location: [$part_seqid:",
+		   "$part_divider].  Unable to adjust the divider position.  ",
+		   "Associated region: [$seqid:$divider",
+		   (defined($div_hash->{HARD_STOP}) ?
+		    "-$div_hash->{HARD_STOP}" : ''),"] may not be encoded ",
+		   "for optimal homology with [$part_seqid].",
+		   {DETAIL =>
+		    join('',("Divider [$seqid:$divider] for identity located ",
+			     "at [",
+			     (defined($div_hash->{HARD_STOP}) ?
+			      "$div_hash->{HARD_START}-$div_hash->{HARD_STOP}"
+			      : 'unknown'),"] based on alignment: ",
+			     "[$div_hash->{PAIR_ID}] was moved due to a ",
+			     "conflict with another divider (which happens ",
+			     "when a sequence's partners have identity ",
+			     "segments with sequences the first sequence has ",
+			     "no observed identity with).  Each divider for ",
+			     "an identity segment has a companion in its ",
+			     "partner.  The expected divider in the partner ",
+			     "was not found.  This can be caused by a pair ",
+			     "of overlapping identity segments that one ",
+			     "sequence has with 2 other sequences, when the ",
+			     "partners have no corresponding segment overlap ",
+			     "in their own map, which causes, as in this ",
+			     "case, the dividers to become out of synch.  ",
+			     "It's OK.  The sequence encoding won't be ",
+			     "harmed, but it may just not have the highest ",
+			     "homology in the region to the right of the ",
+			     "divider to the next segment."))})}
+	return();
+      }
+
     #Copy the divider hash from the original source partner that changed
     $div_map->{$part_seqid}->{$part_divider} = {%$div_hash};
+
+    #Error-check that the PAIR_ID is valid for this sequence
+    getPartnerSeqID($part_seqid,
+		    $div_map->{$part_seqid}->{$part_divider}->{PAIR_ID},
+		    $data);
 
     my $new_type = $div_hash->{TYPE};
 
@@ -5655,12 +5981,16 @@ sub copyDivider
 					     $data,
 					     $side,
 					     0);
-	if(defined($existing_divider) &&
+	if(defined($existing_divider) && $existing_divider &&
 	   ($side ne 'left' || $pair_id ne $partner_pair_id ||
 	    !exists($div_map->{$partner_seqid}) ||
 	    !exists($div_map->{$partner_seqid}->{$existing_divider})))
-	  {next}
-	elsif(defined($existing_divider))
+	  {
+	    debug("Skipping due to existing divider: ",
+		  "[$seqid:$existing_divider].");
+	    next;
+	  }
+	elsif(defined($existing_divider) && $existing_divider)
 	  {$partner_divider = convertDivider($seqid,
 					     $existing_divider,
 					     $partner_pair_id,
@@ -5685,9 +6015,9 @@ sub copyDivider
 				      0,
 				      0))
 	  {
-warning("Conflicts found in divider copy: [$seqid:$divider to $partner_seqid:$partner_divider].");
-#next;
-}
+	    warning("Conflicts found in divider copy: [$seqid:$divider to ",
+		    "$partner_seqid:$partner_divider].");
+	  }
 
 	my $partner_bound = ($side ne 'left' ? undef :
 			     convertDivider($seqid,
@@ -5721,6 +6051,9 @@ warning("Conflicts found in divider copy: [$seqid:$divider to $partner_seqid:$pa
 		      "$pair_id to $partner_seqid:$partner_divider as ",
 		      "$pair_id");
 
+		#Error-check that the pair ID is correct:
+		getPartnerSeqID($partner_seqid,$pair_id,$data);
+
 		$div_map->{$partner_seqid}->{$partner_divider} =
 		  {PAIR_ID    => $pair_id,
 		   TYPE       => ($side eq 'left' ? 'SOURCE' : undef),
@@ -5739,6 +6072,9 @@ warning("Conflicts found in divider copy: [$seqid:$divider to $partner_seqid:$pa
 		      "$pair_id to $partner_seqid:$partner_divider as ",
 		      "$partner_pair_id");
 
+		#Error-check that the pair ID is correct:
+		getPartnerSeqID($partner_seqid,$partner_pair_id,$data);
+
 		$div_map->{$partner_seqid}->{$partner_divider} =
 		  {PAIR_ID    => $partner_pair_id,
 		   TYPE       => undef,
@@ -5756,6 +6092,10 @@ warning("Conflicts found in divider copy: [$seqid:$divider to $partner_seqid:$pa
 	       $div_map->{$partner_seqid}->{$partner_divider}->{TYPE} eq
 	       'RECODE'))
 	  {
+	    #This is called to simply check that $partner_pair_id is valid
+	    getPartnerSeqID($partner_seqid,$partner_pair_id,$data);
+
+	    debug("Over-writing recode divider with a source divider.");
 	    $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID} =
 	      $partner_pair_id;
 	    $div_map->{$partner_seqid}->{$partner_divider}->{TYPE} = 'SOURCE';
@@ -5765,6 +6105,13 @@ warning("Conflicts found in divider copy: [$seqid:$divider to $partner_seqid:$pa
 	    $div_map->{$partner_seqid}->{$partner_divider}->{HARD_STOP} =
 	      $partner_hard_stop;
 	  }
+	else
+	  {
+	    debug("Source divider already exists in this location: ",
+		  "[$partner_seqid:$partner_divider] and it came from [",
+		  $div_map->{$partner_seqid}->{$partner_divider}->{PAIR_ID},
+		  "].");
+	  }
       }
   }
 
@@ -5773,7 +6120,13 @@ sub getPartnerSeqID
     my $seqid   = $_[0];
     my $pair_id = $_[1];
     my $data    = $_[2];
-    return((grep {$_ ne $seqid} keys(%{$data->{$pair_id}->{ALNS}}))[0]);
+
+    my $part_seqids = [grep {$_ ne $seqid} keys(%{$data->{$pair_id}->{ALNS}})];
+
+    if(scalar(@$part_seqids) > 1)
+      {error("Sequence ID [$seqid] is not a member of alignment: [$pair_id].")}
+
+    return($part_seqids->[0]);
   }
 
 sub dividersExist
@@ -6114,43 +6467,74 @@ sub getDividerConflict
 	      ->{PAIR_ID};
 	    my $other_seqid = getPartnerSeqID($seqid,$other_pair,$data);
 	    $divider_warnings->{$divwarnkey}->{MSG} =
-	      join('',("Conflicting self ",(defined($div_map->{$seqid}->{$conflicting_divs->[0]}->{TYPE}) ? $div_map->{$seqid}->{$conflicting_divs->[0]}->{TYPE} : 'RECODE')," divider(s: [",scalar(@$conflicting_divs),"]) found overlapping segment ",
-		   "boundaries: [$seqid:$lesser_bound] and ",
-		   "[$seqid:$greater_bound] (while creating a ",
-		   ($looking_left ? 'SOURCE' : 'RECODE')," divider in ",
-		   "[$seqid]) that are deemed 'closest': [",
-		   join(' ',map {"$seqid:$_-HardStop:" .
-				   $div_map->{$seqid}->{$_}->{HARD_STOP} .
-				     "(" .
-				       (defined($div_map->{$seqid}->{$_}
-						->{TYPE}) ?
-					$div_map->{$seqid}->{$_}->{TYPE} :
-					'RECODE') . ")"}
-			@$conflicting_divs),"].  This can",($div_map->{$seqid}->{$conflicting_divs->[0]}->{HARD_START} > $lesser_bound ? '' : 'not')," be fixed via a swap because the start of the next segment after the conflicting divider is located at [",$div_map->{$seqid}->{$conflicting_divs->[0]}->{HARD_START},"] needs to be greater than or equal to the beginning of the search range [$lesser_bound].  Alignment snippets from the ",
-		   "query alignment and the first divider that had a ",
-		   "conflict (capitalization represents the search bounds - ",
-		   "all other sequence is added based on source dividers ",
-		   "that overlap the search range):\n\n",
-		   getAlnSnippet($seqid,
-				 $conflicting_divs->[0],
-				 $div_map->{$seqid}->{$conflicting_divs->[0]}
-				 ->{HARD_STOP},
-				 $pair_id,
-				 $partner_seqid,
-				 $data,
-				 $lesser_bound,
-				 $greater_bound,
-				 $partner_lesser,
-				 $partner_greater),"\n\n",
-		   getAlnSnippet($seqid,
-				 $conflicting_divs->[0],
-				 $div_map->{$seqid}->{$conflicting_divs->[0]}
-				 ->{HARD_STOP},
-				 $other_pair,
-				 $other_seqid,
-				 $data,
-				 $lesser_bound,
-				 $greater_bound),"\n\n"));
+	      join('',
+		   ("Conflicting self ",
+		    (defined($div_map->{$seqid}->{$conflicting_divs->[0]}
+			     ->{TYPE}) ?
+		     $div_map->{$seqid}->{$conflicting_divs->[0]}->{TYPE} :
+		     'RECODE')," divider(s: [",scalar(@$conflicting_divs),
+		    "]) found overlapping segment ",
+		    "boundaries: [$seqid:$lesser_bound] and ",
+		    "[$seqid:$greater_bound] (while creating a ",
+		    ($looking_left ? 'SOURCE' : 'RECODE')," divider in ",
+		    "[$seqid]) that are deemed 'closest': [",
+		    join(' ',map {"$seqid:$_-HardStop:" .
+				    $div_map->{$seqid}->{$_}->{HARD_STOP} .
+				      "(" .
+					(defined($div_map->{$seqid}->{$_}
+						 ->{TYPE}) ?
+					 $div_map->{$seqid}->{$_}->{TYPE} :
+					 'RECODE') . ")"}
+			 @$conflicting_divs),"].  This can",
+		    ($div_map->{$seqid}->{$conflicting_divs->[0]}->{HARD_START}
+		     > $lesser_bound ? '' : 'not')," be fixed via a swap ",
+		    "because the start of the next segment after the ",
+		    "conflicting divider is located at [",
+		    $div_map->{$seqid}->{$conflicting_divs->[0]}->{HARD_START},
+		    "] needs to be greater than or equal to the beginning of ",
+		    "the search range [$lesser_bound].  Alignment snippets ",
+		    "from the query alignment and the first divider that had ",
+		    "a conflict (capitalization represents the search bounds ",
+		    "- all other sequence is added based on source dividers ",
+		    "that overlap the search range):\n\nCapitalization in ",
+		    "the first sequence is the conflicting divider's ",
+		    "position and hard stop.  Capitalization in the second ",
+		    "sequence is the converted search range.\n",
+		    getAlnSnippet($seqid,
+				  $conflicting_divs->[0],
+				  $div_map->{$seqid}->{$conflicting_divs->[0]}
+				  ->{HARD_STOP},
+				  $pair_id,
+				  $partner_seqid,
+				  $data,
+				  $lesser_bound,
+				  $greater_bound,
+				  $partner_lesser,
+				  $partner_greater),"\n\nCapitalization in ",
+		    "the first sequence is the search range.  Capitalization ",
+		    "in the second sequence is the converted conflicting ",
+		    "divider's position and hard stop.\n",
+		    getAlnSnippet($seqid,
+				  $conflicting_divs->[0],
+				  $div_map->{$seqid}->{$conflicting_divs->[0]}
+				  ->{HARD_STOP},
+				  $other_pair,
+				  $other_seqid,
+				  $data,
+				  $lesser_bound,
+				  $greater_bound,
+				  convertDivider($seqid,
+						 $conflicting_divs->[0],
+						 $other_pair,
+						 $other_seqid,
+						 $data),
+				  convertAlnSeqCoord($seqid,
+						     $div_map->{$seqid}
+						     ->{$conflicting_divs->[0]}
+						     ->{HARD_STOP},
+						     $other_pair,
+						     $other_seqid,
+						     $data)),"\n\n"));
 	    $divider_warnings->{$divwarnkey}->{DETAIL}   = '';
 	    $divider_warnings->{$divwarnkey}->{SEQID}    = $seqid;
 	    $divider_warnings->{$divwarnkey}->{DIVIDERS} =
@@ -6158,9 +6542,12 @@ sub getDividerConflict
 	    $divider_warnings->{$divwarnkey}->{ORDER}    =
 	      scalar(keys(%$divider_warnings));
 
+	    #Error-check the conflicting divider
+	    getPartnerSeqID($seqid,$other_pair,$data);
+
 	    return({SEQID   => $seqid,
 		    DIVIDER => $conflicting_divs->[0],
-		    PAIR_ID => $pair_id});
+		    PAIR_ID => $other_pair});
 	  }
 
 	return(undef);
@@ -6233,43 +6620,57 @@ sub getDividerConflict
 	  ->{PAIR_ID};
 	my $other_seqid = getPartnerSeqID($partner_seqid,$other_pair,$data);
 	$divider_warnings->{$divwarnkey}->{MSG} =
-	  join('',("Conflicting partner ",(defined($div_map->{$partner_seqid}->{$conflicting_divs->[0]}->{TYPE}) ? $div_map->{$partner_seqid}->{$conflicting_divs->[0]}->{TYPE} : 'RECODE')," divider(s: [",scalar(@$conflicting_divs),"]) found overlapping segment ",
-		   "boundaries: [$partner_seqid:$partner_lesser] and ",
-		   "[$partner_seqid:$partner_greater] (while creating an unknown divider while looking ",
-		   ($looking_left ? 'left' : 'right')," in ",
-		   "[$seqid]) that are deemed 'closest': [",
-		   join(' ',map {"$partner_seqid:$_-HardStop:" .
-				   $div_map->{$partner_seqid}->{$_}
-				     ->{HARD_STOP} . "(" .
-				       (defined($div_map->{$partner_seqid}
-						->{$_}->{TYPE}) ?
-					$div_map->{$partner_seqid}->{$_}
-					->{TYPE} : 'RECODE') . ")"}
-			@$conflicting_divs),"].  This can",($div_map->{$partner_seqid}->{$conflicting_divs->[0]}->{HARD_START} > $partner_lesser ? '' : 'not')," be fixed via a swap because the start of the next segment after the conflicting divider is located at [",$div_map->{$partner_seqid}->{$conflicting_divs->[0]}->{HARD_START},"] needs to be greater than or equal to the beginning of the search range [$partner_lesser].  Alignment snippets from the ",
-		   "query alignment and the first partner that had a ",
-		   "conflict (capitalization represents the search bounds - ",
-		   "all other sequence is added based on source dividers ",
-		   "that overlap the search range):\n\n",
-		   getAlnSnippet($partner_seqid,
-				 $conflicting_divs->[0],
-				 $div_map->{$partner_seqid}
-				 ->{$conflicting_divs->[0]}->{HARD_STOP},
-				 $pair_id,
-				 $seqid,
-				 $data,
-				 $partner_lesser,
-				 $partner_greater,
-				 $lesser_bound,
-				 $greater_bound),"\n\n",
-		   getAlnSnippet($partner_seqid,
-				 $conflicting_divs->[0],
-				 $div_map->{$partner_seqid}
-				 ->{$conflicting_divs->[0]}->{HARD_STOP},
-				 $other_pair,
-				 $other_seqid,
-				 $data,
-				 $partner_lesser,
-				 $partner_greater),"\n\n"));
+	  join('',
+	       ("Conflicting partner ",
+		(defined($div_map->{$partner_seqid}->{$conflicting_divs->[0]}
+			 ->{TYPE}) ?
+		 $div_map->{$partner_seqid}->{$conflicting_divs->[0]}->{TYPE} :
+		 'RECODE')," divider(s: [",scalar(@$conflicting_divs),"]) ",
+		"found overlapping segment boundaries: [$partner_seqid:",
+		"$partner_lesser] and [$partner_seqid:$partner_greater] ",
+		"(while creating an unknown divider while looking ",
+		($looking_left ? 'left' : 'right')," of a segment in ",
+		"[$seqid/$partner_seqid]) that are deemed 'closest': [",
+		join(' ',map {$div_map->{$partner_seqid}->{$_}->{PAIR_ID} .
+				":$partner_seqid:$_-HardStop:" .
+				  $div_map->{$partner_seqid}->{$_}
+				    ->{HARD_STOP} . "(" .
+				      (defined($div_map->{$partner_seqid}
+					       ->{$_}->{TYPE}) ?
+				       $div_map->{$partner_seqid}->{$_}
+				       ->{TYPE} : 'RECODE') . ")"}
+		     @$conflicting_divs),"].  This can",
+		($div_map->{$partner_seqid}->{$conflicting_divs->[0]}
+		 ->{HARD_START} > $partner_lesser ? '' : 'not')," be fixed ",
+		"via a swap because the start of the next segment after the ",
+		"conflicting divider is located at [",
+		$div_map->{$partner_seqid}->{$conflicting_divs->[0]}
+		->{HARD_START},"] needs to be greater than or equal to the ",
+		"beginning of the search range [$partner_lesser].  Alignment ",
+		"snippets from the query alignment and the first partner ",
+		"that had a conflict (capitalization represents the search ",
+		"bounds - all other sequence is added based on source ",
+		"dividers that overlap the search range):\n\n",
+		getAlnSnippet($partner_seqid,
+			      $conflicting_divs->[0],
+			      $div_map->{$partner_seqid}
+			      ->{$conflicting_divs->[0]}->{HARD_STOP},
+			      $pair_id,
+			      $seqid,
+			      $data,
+			      $partner_lesser,
+			      $partner_greater,
+			      $lesser_bound,
+			      $greater_bound),"\n\n",
+		getAlnSnippet($partner_seqid,
+			      $conflicting_divs->[0],
+			      $div_map->{$partner_seqid}
+			      ->{$conflicting_divs->[0]}->{HARD_STOP},
+			      $other_pair,
+			      $other_seqid,
+			      $data,
+			      $partner_lesser,
+			      $partner_greater),"\n\n"));
 	$divider_warnings->{$divwarnkey}->{DETAIL} =
 	  join('',("Bounds were converted from [$seqid:$lesser_bound] and ",
 		   "[$seqid:$greater_bound] and the conflicting divider ",
@@ -6280,6 +6681,9 @@ sub getDividerConflict
 	  [@$conflicting_orig_divs];
 	$divider_warnings->{$divwarnkey}->{ORDER} =
 	  scalar(keys(%$divider_warnings));
+
+	#Error-check the conflicting divider
+	getPartnerSeqID($partner_seqid,$other_pair,$data);
 
 	return({SEQID   => $partner_seqid,
 		DIVIDER => $conflicting_divs->[0],
@@ -6405,7 +6809,14 @@ sub convertDivider
 	     ((($query_coord - 1) % 3) + 1),"] was sent in.")}
 
     debug("Checking if coord [$query_coord] is larger than [$query_seqid]'s ",
-	  "length as it exists in [$pairid].  Data for [$pairid] ",(exists($data->{$pairid}) ? 'exists' : 'does not exist'),".  Data for SEQS ",(exists($data->{$pairid}) && exists($data->{$pairid}->{SEQS}) ? 'exists' : 'does not exist'),".  Data for [$query_seqid] ",(exists($data->{$pairid}) && exists($data->{$pairid}->{SEQS}) && exists($data->{$pairid}->{SEQS}->{$query_seqid}) ? 'exists but is not defined' : 'does not exist'),'.')
+	  "length as it exists in [$pairid].  Data for [$pairid] ",
+	  (exists($data->{$pairid}) ? 'exists' : 'does not exist'),".  Data ",
+	  "for SEQS ",
+	  (exists($data->{$pairid}) && exists($data->{$pairid}->{SEQS}) ?
+	   'exists' : 'does not exist'),".  Data for [$query_seqid] ",
+	  (exists($data->{$pairid}) && exists($data->{$pairid}->{SEQS}) &&
+	   exists($data->{$pairid}->{SEQS}->{$query_seqid}) ?
+	   'exists but is not defined' : 'does not exist'),'.')
       if(!defined($data->{$pairid}->{SEQS}->{$query_seqid}));
 
     if($query_coord >= length($data->{$pairid}->{SEQS}->{$query_seqid}))
@@ -6814,11 +7225,12 @@ sub weaveSeqs
 		    $codecount = 27;
 		    $sourceseqs = {}; #Clear out the hash, but keep it a hash
 		  }
-		elsif(!defined($sourcelkup->{$pair}->{$seqid}))
+		elsif(!exists($sourcelkup->{$pair}->{$seqid}) ||
+		      !defined($sourcelkup->{$pair}->{$seqid}))
 		  {
-		    error("Partner for sequence [$seqid] not found for ",
-			  "alignment [$pair].  Unable to generate sourced ",
-			  "sequence string.");
+		    error("Partner for sequence [$seqid:$start-$stop] not ",
+			  "found for alignment [$pair].  Unable to generate ",
+			  "sourced sequence string.");
 		    $sourceseqs->{SEQS}->{$seqid} .=
 		      '_' x ($stop - $start + 1);
 		  }
@@ -8073,8 +8485,7 @@ sub issueDividerWarnings
 	my $dividers = $divider_warnings->{$divwarnkey}->{DIVIDERS};
 	my $msg      = $divider_warnings->{$divwarnkey}->{MSG};
 	my $detail   = (exists($divider_warnings->{$divwarnkey}->{DETAIL}) ?
-			$divider_warnings->{$divwarnkey}->{DETAIL} . '  ' :
-			'');
+			$divider_warnings->{$divwarnkey}->{DETAIL} : '');
 
 	#First, determine whether the undefined dividers were updated to source
 	#dividers.  No warning is necessary if all dividers are source dividers
