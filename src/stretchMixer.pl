@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.030';
+our $VERSION = '1.031';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -963,6 +963,7 @@ sub addToSolution
     my $codon_hash         = $_[16];
     my $add_size           = $_[17]; #Used to know how to score the solution
 
+    #See if the first sequence fits (could generate alt codons on both sides)
     my $fit_data1 = segmentFits($soln,
 				$seqid1,
 				$first_codon_start1,
@@ -976,6 +977,7 @@ sub addToSolution
     if(!defined($fit_data1))
       {return(undef)}
 
+    #See if the second sequence fits (could generate alt codons on both sides)
     my $fit_data2 = segmentFits($soln,
 				$seqid2,
 				$first_codon_start2,
@@ -1534,10 +1536,10 @@ sub segmentFits
 
     foreach my $rec (@$seqlist)
       {
-	next if($rec->{PAIR_ID} eq $pairid);
-
 	if($rec->{TYPE} eq 'seg')
 	  {
+	    next if($rec->{PAIR_ID} eq $pairid);
+
 	    my $common_iden_start = 0;
 	    if($iden_start >= $rec->{IDEN_START} &&
 	       $iden_start <= $rec->{IDEN_STOP})
@@ -1919,7 +1921,7 @@ sub segmentFits
 
 	    #If the already added alternate codon overlaps the candidate's
 	    #left edge codon
-	    if($rec->{IDEN_START} == $first_codon_start)
+	    if($rec->{FIRST_CODON_START} == $first_codon_start)
 	      {
 		#If the candidate already has an alternate codon & differs
 		if(defined($alt_left_cdn) &&
@@ -1954,12 +1956,16 @@ sub segmentFits
 
 		    if($subseq1 ne $subseq2)
 		      {return(undef)}
+
+		    #There is an existing compatible alt codon, so no need to
+		    #create another
+		    $no_left_cdn = 0;
 		  }
 	      }
 
 	    #If the already added alternate codon overlaps the candidate's
 	    #right edge codon
-	    if($rec->{IDEN_START} == ($last_codon_stop - 2))
+	    if($rec->{LAST_CODON_STOP} == $last_codon_stop)
 	      {
 		#If the candidate already has an alternate codon & differs
 		if(defined($alt_right_cdn) &&
@@ -1994,11 +2000,17 @@ sub segmentFits
 
 		    if($subseq1 ne $subseq2)
 		      {return(undef)}
+
+		    #There is an existing compatible alt codon, so no need to
+		    #create another
+		    $no_right_cdn = 0;
 		  }
 	      }
 
 	    #If the already added alternate codon overlaps the candidate's
-	    #identity region (not including the edge codons' identity).
+	    #identity region body (not including the edge codons' identity),
+	    #Make sure that that portion of the segment being added matches any
+	    #pre-existing alternate codons
 	    if($rec->{IDEN_START} >= ($first_codon_start + 3) &&
 	       $rec->{IDEN_START} <= ($last_codon_stop - 3))
 	      {
@@ -2008,9 +2020,11 @@ sub segmentFits
 
 		my $subseq =
 		  substr($hash->{$pairid}->{SEQS}->{$seqid},
-			 $rec->{IDEN_START} - 1,
+			 $rec->{FINAL_START} - 1,
 			 3);
 
+		#If the middle of the segment doesn't match an overlapping alt
+		#codon, return undef
 		if($subseq ne $rec->{ALT_CODON})
 		  {return(undef)}
 	      }
@@ -2018,7 +2032,7 @@ sub segmentFits
       }
 
     #If no alternate codons already in the solution, return them
-    return({LEFT_CODON  => ($no_left_cdn  ? $alt_left_cdn : undef),
+    return({LEFT_CODON  => ($no_left_cdn  ? $alt_left_cdn  : undef),
 	    RIGHT_CODON => ($no_right_cdn ? $alt_right_cdn : undef)});
   }
 
@@ -3155,8 +3169,14 @@ sub updateFinalCoords
 		    #Else error
 		    else
 		      {
-			error("Overlapping alternate codons encountered.  ",
-			      "Skipping.")
+			error("Overlapping alternate codons encountered at ",
+			      "position: [$seqid:$lastrec->{FINAL_START}]: ",
+			      "[$lastrec->{ALT_CODON}] versus ",
+			      "[$currec->{ALT_CODON}].  Skipping ",
+			      "[$currec->{ALT_CODON}] & arbitrarily ",
+			      "selecting: [$lastrec->{ALT_CODON}].",
+			      {DETAIL => ("Proposed alt position: " .
+					  "[$seqid:$currec->{FINAL_START}]")})
 			  unless($lastrec->{ALT_CODON} eq
 				 $currec->{ALT_CODON});
 		      }
