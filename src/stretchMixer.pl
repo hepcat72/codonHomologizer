@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.032';
+our $VERSION = '1.033';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -5189,7 +5189,14 @@ sub fixDividerConflict
 		       $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
 		       ->{PAIR_ID} ne
 		       $div_map->{$bad_div_obj->{SEQID}}->{$old_divider}
-		       ->{PAIR_ID})
+		       ->{PAIR_ID} &&
+
+		       #This was added here when this warning was encountered
+		       #in a dataset however, this likely needs to be added
+		       #elsewhere as well
+		       $src_div !=
+		       $div_map->{$bad_div_obj->{SEQID}}->{$src_div}
+		       ->{HARD_START})
 		      {
 			warning($msg);
 			debug("The pre-existing alignment used to source ",
