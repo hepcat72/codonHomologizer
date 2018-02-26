@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.031';
+our $VERSION = '1.032';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -5166,8 +5166,8 @@ sub fixDividerConflict
 				$div_map->{$bad_div_obj->{SEQID}}->{$src_div}
 				->{HARD_STOP} : ''),"] while splitting ",
 			       "another source divider [$bad_div_obj->{SEQID}",
-			       ":",
-			       $old_divider-$div_map->{$bad_div_obj->{SEQID}}
+			       ":$old_divider-",
+			       $div_map->{$bad_div_obj->{SEQID}}
 			       ->{$old_divider}->{HARD_START},"-",
 			       $div_map->{$bad_div_obj->{SEQID}}
 			       ->{$old_divider}->{HARD_STOP},"] for overlap ",
