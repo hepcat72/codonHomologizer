@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.033';
+our $VERSION = '1.034';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -7341,16 +7341,25 @@ sub weaveSeqs
 		   "and replaced to preserve the integrity of the identity ",
 		   "segments.")}
 
-	my $n = numDiff($any_orig_seq,$seqhash->{$seqid});
+	my($n,$real_nt_diffs) = numDiff($any_orig_seq,$seqhash->{$seqid},0);
+	my $ambig_nts = $n - $real_nt_diffs;
+	my($d,$real_aa_diffs) = numDiff($any_orig_aa,$mixed_aa,1);
+	my $ambigs = $d - $real_aa_diffs;
 	$validation_output .=
-	  join('',("[$seqid] AA sequence: ",($any_orig_aa eq $mixed_aa ?
-					     '' : 'NOT '),
-		   "Validated",($any_orig_aa eq $mixed_aa ? '^' : ''),
-		   ".  Identity segment inclusion: ",
-		   ($bad_nts ? 'Repaired/' : ''),"Validated#",
+	  join('',("$seqid\n\t",($real_aa_diffs ? 'NOT ' : ''),
+		   "Validated\tAA sequence correctness",
+		   ($real_aa_diffs ? " ($real_aa_diffs aas differ)" : '^'),
+		   ".\n\t",($ambigs ? 'NOT ' : ''),"Validated\tAA sequence ",
+		   "completeness",($ambigs ? " ($ambigs ambiguous aas)" : ''),
+		   ".\n\t",($bad_nts ? 'Repaired/' : ''),"Validated\t",
+		   "Identity segment inclusion",
 		   ($bad_nts ? " ([$bad_nts] nts among [$bad_segs] identity " .
-		    "segments repaired.)" : ''),
-		   "  [$n/",length($any_orig_seq),"] nts changed*.\n"));
+		    "segments repaired)" : ''),
+		   ".#\n\t",($ambig_nts ? 'NOT ' : ''),"Validated\t",
+		   "NT sequence.",
+		   ($ambig_nts ? "  There were [$ambig_nts] ambiguous nts."
+		    : ''),"  (Note: [$real_nt_diffs/",length($any_orig_seq),
+		   "] nts were changed*.)\n"));
       }
 
     $validation_output .=
@@ -7648,6 +7657,7 @@ sub numDiff
   {
     my $seq1 = $_[0];
     my $seq2 = $_[1];
+    my $prot = $_[2];
 
     if(length($seq1) != length($seq2))
       {
@@ -7656,14 +7666,25 @@ sub numDiff
       }
 
     my $d = 0;
+    my $r = 0;
     foreach my $p (0..(length($seq1) - 1))
       {
-	if(uc(substr($seq1,$p,1)) eq '-' || uc(substr($seq2,$p,1)) eq '-')
+	my $s1c = uc(substr($seq1,$p,1));
+	my $s2c = uc(substr($seq2,$p,1));
+	if($s1c eq '-' || $s2c eq '-')
 	  {error("Alignment characters found.")}
-	$d += (substr($seq1,$p,1) eq substr($seq2,$p,1));
+	if($s1c ne $s2c)
+	  {
+	    $d++;
+	    #If either is an ambiguous nucleotide
+	    if(($prot && $s1c !~ /^x$/i && $s2c !~ /^x$/i) ||
+	       (!$prot &&
+		$s1c !~ /^[bdhvrykmswn]$/i && $s2c !~ /^[bdhvrykmswn]$/i))
+	      {$r++}
+	  }
       }
 
-    return($d);
+    return($d,$r);
   }
 
 sub translate
