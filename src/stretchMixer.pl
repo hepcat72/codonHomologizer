@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.034';
+our $VERSION = '1.035';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -5846,7 +5846,7 @@ sub getClosestRightDivider
       }
 
     if(defined($left_most_divider) && $left_most_divider)
-	  {return($left_most_divider,$closest)}
+      {return($left_most_divider,$closest)}
 
     #If the closest "segment" is the end of the sequence (plus 1), no need to
     #find the midpoint, because it's not a real segment - rather it's just the
@@ -6095,22 +6095,56 @@ sub copyDivider
 	      }
 	    else
 	      {
-		debug({LEVEL => 4},"Copying divider $seqid:$divider in ",
-		      "$pair_id to $partner_seqid:$partner_divider as ",
-		      "$partner_pair_id");
+		#We need to make sure that the divider will end up within the
+		#expected bounds when copied back (like if it's found as an
+		#existing divider, will it be in the expected region).  A
+		#divider can end up being completely out of bounds if the
+		#region we're looking in aligns with a lot of gaps with another
+		#sequence.
+		my $check_divider = convertDivider($partner_seqid,
+						   $partner_divider,
+						   $partner_pair_id,
+						   $seqid,
+						   $data);
+		if(coordsOverlap($check_divider,$check_divider,
+				 $lesser_bound,$greater_bound))
+		  {
+		    debug({LEVEL => 4},"Copying divider $seqid:$divider (in ",
+			  "between $seqid:$lesser_bound and $seqid:",
+			  "$greater_bound) in $pair_id to $partner_seqid:",
+			  "$partner_divider as $partner_pair_id which is ",
+			  "position: [$seqid:",
+			  convertDivider($partner_seqid,
+					 $partner_divider,
+					 $partner_pair_id,
+					 $seqid,
+					 $data),"] when converted back.");
 
-		#Error-check that the pair ID is correct:
-		getPartnerSeqID($partner_seqid,$partner_pair_id,$data);
+		    #Error-check that the pair ID is correct:
+		    getPartnerSeqID($partner_seqid,$partner_pair_id,$data);
 
-		$div_map->{$partner_seqid}->{$partner_divider} =
-		  {PAIR_ID    => $partner_pair_id,
-		   TYPE       => undef,
-		   STOP       => undef,
-		   HARD_START => undef,
-		   HARD_STOP  => undef,
-		   IDEN_START => 0,
-		   IDEN_STOP  => 0,
-		   SEQ        => ''};
+		    $div_map->{$partner_seqid}->{$partner_divider} =
+		      {PAIR_ID    => $partner_pair_id,
+		       TYPE       => undef,
+		       STOP       => undef,
+		       HARD_START => undef,
+		       HARD_STOP  => undef,
+		       IDEN_START => 0,
+		       IDEN_STOP  => 0,
+		       SEQ        => ''};
+		  }
+		else
+		  {debug({LEVEL => 4},"Skipping divider copy of $seqid:",
+			 "$divider (in between $seqid:$lesser_bound and ",
+			 "$seqid:$greater_bound) in $pair_id to ",
+			 "$partner_seqid:$partner_divider as ",
+			 "$partner_pair_id because position: [$seqid:",
+			  convertDivider($partner_seqid,
+					 $partner_divider,
+					 $partner_pair_id,
+					 $seqid,
+					 $data),"] is out of bounds when",
+			 " converted back.")}
 	      }
 	  }
 	elsif($side eq 'left' && $pair_id eq $partner_pair_id &&
@@ -6351,10 +6385,12 @@ sub dividerExists
 						  $data)}
 			      @$existing_divs];
 
-    debug({LEVEL => 5},"[",scalar(@$existing_divs),"] dividers already exist ",
+    debug({LEVEL => 5},"Dividers already exist: [",
+	  join(',',map {"$partner_seqid:$_"} @$existing_divs),"] ",
 	  "between $seqid:$lesser_bound and $seqid:$greater_bound in ",
 	  "$partner_seqid:$partner_lesser_gaps and $partner_seqid:",
-	  "$partner_greater according to alignment $pair_id");
+	  "$partner_greater according to alignment $pair_id.  Converted back ",
+	  "to: [",join(',',map {"$seqid:$_"} @$existing_orig_divs),"].");
 
     #If multiple dividers were found and at least 1 is nonsource and occurs
     #after a source divider (i.e. it interrupts a source divider), issue a
