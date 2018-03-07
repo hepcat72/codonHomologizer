@@ -2305,8 +2305,8 @@ sub createSuffixOutfileTagteam
     my $flags = ($hidden == 1 && $of_usage->{HIDDEN} ?
 		 '' : $of_usage->{OPTFLAG});
     $flags =~ s/,\*$//;
-    $flags = ($hidden == 1 && $sf_usage->{HIDDEN} ? '' :
-	      ($flags eq '' ? '' : ',') . $sf_usage->{OPTFLAG});
+    $flags .= ($hidden == 1 && $sf_usage->{HIDDEN} ? '' :
+	       ($flags eq '' ? '' : ',') . $sf_usage->{OPTFLAG});
     if($primary && $flags !~ /,\*$/)
       {$flags .= ',*'}
 
@@ -4414,7 +4414,7 @@ sub addDefaultFileOptions
 	      ->[$usage_file_indexes->[$primary_infile_type]]->{GETOPTKEY};
 	    my $newkey = $oldkey;
 	    #The infile getopt key is assumed to have '=' in it
-	    $newkey =~ s/=/$optstradd|=/;
+	    $newkey =~ s/=/|$optstradd=/;
 	    if($oldkey ne $newkey)
 	      {
 		#Set the new key in the getopt hash and update it in the usage
@@ -12556,6 +12556,11 @@ sub alignHelpCols
 	      }
 	    else
 	      {
+		if($desc_start =~ /\n$/)
+		  {
+		    chomp($desc_start);
+		    $desc_remainder = "\n" . $desc_remainder;
+		  }
 		my $pat = $desc_start;
 		chop($desc_start) if($added_hyphen);
 		if($desc_remainder =~ /\Q$pat\E *\n?(.*)/s)
@@ -12996,7 +13001,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.094';
+    $VERSION       = '4.097';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
