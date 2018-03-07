@@ -116,12 +116,16 @@ my($required_infile_types,
    $def_collide_mode_outf,
    $outfile_mode_lookup,
    $default_infile_added,
-   $default_outfile_added,
    $default_outfile_suffix_added,
+   $default_outfile_added,
+   $default_outdir_added,
    $default_tagteam_added,
+   $default_infile_opt,
+   $default_outfile_suffix_opt,
+   $default_outfile_opt,
+   $default_outdir_opt,
    $default_outfile_id,
    $default_outfile_suffix_id,
-   $default_outdir_added,
    $file_group_num,
    $explicit_quit,
    $run,
@@ -132,7 +136,8 @@ my($required_infile_types,
    $explicit_usage,
    $flag_check_hash,
    $default_run_mode,
-   $inf_to_usage_hash);
+   $inf_to_usage_hash,
+   $outf_to_usage_hash);
 
 sub _init
   {
@@ -254,16 +259,21 @@ sub _init
     $default_infile_added         = 0;
     $default_outfile_added        = 0;
     $default_outfile_suffix_added = 0;
+    $default_outdir_added         = 0;
     $default_tagteam_added        = 0;
+    $default_infile_opt           = 'i|input-file|stdin-stub|stub=s';
+    $default_outfile_suffix_opt   = 'o|outfile-extension|outfile-suffix=s';
+    $default_outfile_opt          = 'outfile|output-file=s';
+    $default_outdir_opt           = 'outdir|output-directory=s';
     $default_outfile_id           = undef;
     $default_outfile_suffix_id    = undef;
-    $default_outdir_added         = 0;
     $file_group_num               = [];
     $explicit_quit                = 0;
     $flag_check_hash              = {};
     $default_run_mode             = 'usage'; #usage,run,help,dry-run
     $outdirs_added                = 0;
     $inf_to_usage_hash            = {};
+    $outf_to_usage_hash           = {};
 
     $def_collide_mode_suff = 'error';  #Use these 2 defaults for mode for
     $def_collide_mode_outf = 'merge';  #outfile option types' collide mode
@@ -346,7 +356,8 @@ sub getRelationStr
 	else
 	  {
 	    error('Expected 1 parameter.  Got [',scalar(@_),'].  ',
-		  "Returning default: [$default].");
+		  "Returning default: [",
+		  (defined($default) ? $default : 'undef'),"].");
 	    return($default);
 	  }
       }
@@ -355,7 +366,8 @@ sub getRelationStr
     elsif(ref($instr) ne '')
       {
 	error('Expected a scalar.  Got [',ref($instr),'].  ',
-	      "Returning default: [$default].");
+	      "Returning default: [",
+		  (defined($default) ? $default : 'undef'),"].");
 	return($default);
       }
 
@@ -436,8 +448,18 @@ sub addInfileOption
 
 	debug({LEVEL => -1},'Setting default values for addInfileOption.');
 
+	$get_opt_str = removeDupeFlags($default_infile_opt);
+	if(!defined($get_opt_str) || $get_opt_str eq '')
+	  {
+	    error('Unable to add default input file type ',
+		  "[$default_infile_opt] due to redundant flags: [",
+		  join(',',getDupeFlags($get_opt_str)),'].');
+	    $default_infile_opt = $get_opt_str;
+	    return(undef);
+	  }
+	$default_infile_opt = $get_opt_str;
+
 	$default_infile_added = 1;
-	$get_opt_str = 'i|input-file|stdin-stub|stub=s';
 	$required    = 0;
 	$primary     = 1;
 	#The descriptions are added below
@@ -448,7 +470,7 @@ sub addInfileOption
     if(!isGetOptStrValid($get_opt_str,'infile'))
       {
 	if($adding_default)
-	  {warning("Unable to add default -i (input file) parameter.")}
+	  {warning("Unable to add default input file option.")}
 	else
 	  {
 	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
@@ -565,6 +587,16 @@ sub addInfileOption
       ']},[sglob($_[1])])}';
     $GetOptHash->{$get_opt_str} = eval($getoptsub);
 
+    if($default_str ne '')
+      {
+	#If the default value is simple, clean up its display
+	if($default_str !~ /\)\(/)
+	  {
+	    $default_str =~ s/^\(\(//;
+	    $default_str =~ s/\)\)$//;
+	  }
+      }
+
     if($primary)
       {
 	if(defined($primary_infile_type))
@@ -583,15 +615,7 @@ sub addInfileOption
 	$detail_desc .= $detailsadd;
 
 	if($default_str ne '')
-	  {
-	    #If the default value is simple, clean up its display
-	    if($default_str !~ /\)\(/)
-	      {
-		$default_str =~ s/^\(\(//;
-		$default_str =~ s/\)\)$//;
-	      }
-	    $default_str .= " or $defaultadd";
-	  }
+	  {$default_str .= " or $defaultadd"}
 	else
 	  {$default_str = $defaultadd}
       }
@@ -667,6 +691,27 @@ sub getInfileUsageHash
     error('Invalid input file type ID: [',
 	  (defined($file_type_id) ? $file_type_id : 'undef'),
 	  '].  Must be an ID as returned by addInfileOption.');
+    return(undef);
+  }
+
+#Given an output file suffix ID, returns the usage hash for the file type
+#defined *by the programmer*.  That is to say, a usage entry exists for both
+#the outfile index and the suffix index.  The usage for the one that
+#corresponds to the original function called is the one that is returned (i.e.
+#if the programmer called addOutfileOption, the 'outfile' usage is returned and
+#if the programmer called addOutfileSuffixOption, the 'suffix' usage is
+#returned).  This is significant because addOutfileOption calls
+#addOutfileSuffixOption.
+#Globals used: $outf_to_usage_hash
+sub getOutfileUsageHash
+  {
+    my $suffix_id = $_[0];
+    if(defined($suffix_id) && exists($outf_to_usage_hash->{$suffix_id}) &&
+       scalar(@$usage_array) > $outf_to_usage_hash->{$suffix_id} &&
+       $outf_to_usage_hash->{$suffix_id} > -1)
+      {return($usage_array->[$outf_to_usage_hash->{$suffix_id}])}
+    error('Invalid suffix ID: [',
+	  (defined($suffix_id) ? $suffix_id : 'undef'),'].');
     return(undef);
   }
 
@@ -820,7 +865,20 @@ sub addRequiredRelationship
 	  }
 	else
 	  {
-	    warning("Setting primary input file type.");
+	    warning("Setting primary input file type to establish ",
+		    "relationship: [$relationship] with another file type ",
+		    "that is dependent on it because the file type ID was ",
+		    "not supplied.",
+		    {DETAIL =>
+		     join('',('Usually, this happens when an outfile suffix ',
+			      'is defined either by addOutfileSuffixOption ',
+			      'or addOutfileTagteamOption without FILETYPEID ',
+			      'or PAIR_WITH being defined, though other ',
+			      'dependant options can also cause this ',
+			      'warning.  If there is only 1 input file type ',
+			      'or one input file type has been set as ',
+			      'primary, it is set here automatically with ',
+			      'this warning.'))});
 	    $file_type2 = $primary_infile_type;
 	  }
       }
@@ -1006,12 +1064,71 @@ sub getDupeFlags
     return($existing);
   }
 
+#Globals used: $GetOptHash
+sub removeDupeFlags
+  {
+    my $get_opt_str = $_[0];
+
+    my @opt_strs = ();
+    my $hash = {};
+    if(scalar(keys(%$GetOptHash)))
+      {push(@opt_strs,keys(%$GetOptHash))}
+    else
+      {return($get_opt_str)}
+
+    foreach my $opt_str (@opt_strs)
+      {
+	my $negatable = ($opt_str =~ /\!$/);
+
+	#Get rid of the flag modifiers, etc.
+	$opt_str =~ s/[=:!+].*//;
+
+	#Cycle through the flags (without the dashes)
+	foreach my $flag (split(/\|+/,$opt_str))
+	  {
+	    my $tflag = $flag;
+
+	    $hash->{$tflag} = 0;
+
+	    if($negatable)
+	      {
+		$hash->{"no$tflag"}  = 0;
+		$hash->{"no-$tflag"} = 0;
+	      }
+	  }
+      }
+
+    #Separate the end of the get opt str from the body
+    my $get_opt_str_end = $get_opt_str;
+    $get_opt_str_end =~ s/.*([=:!+].*)/$1/;
+    my $new_get_opt_str = $get_opt_str;
+    $new_get_opt_str =~ s/[=:!+].*//;
+
+    #Determine whether the flag could have "no" or "no-" prepended to it
+    my $negatable = ($get_opt_str =~ /\!$/);
+
+    $new_get_opt_str =
+      join('|',
+	   grep {!exists($hash->{$_}) &&
+		   (!$negatable || (!exists($hash->{"no$_"}) &&
+				    !exists($hash->{"no-$_"})))}
+	   split(/\|/,$new_get_opt_str));
+
+    if($new_get_opt_str eq '')
+      {return($new_get_opt_str)}
+
+    $new_get_opt_str .= $get_opt_str_end;
+
+    return($new_get_opt_str);
+  }
+
 #This sub does not add new functionality.  It simply adds an infile option, but
 #marks it as an outfile in the outfile_types_array.  It also adds a hidden
 #outfile_suffix option with a static default value of an empty string.  That
 #way, no functionality needs to change with regard to outfile checking.
 #Though, there needs to be checks added to the outfile_types_hash to not
 #complain about missing input files.
+#Globals used: $outf_to_usage_hash
 sub addOutfileOption
   {
     my @in = getSubParams([qw(GETOPTKEY COLLISIONMODE REQUIRED PRIMARY DEFAULT
@@ -1064,9 +1181,19 @@ sub addOutfileOption
 
 	debug({LEVEL => -1},'Setting default values for addOutfileOption.');
 
+	$get_opt_str = removeDupeFlags($default_outfile_opt);
+	if(!defined($get_opt_str) || $get_opt_str eq '')
+	  {
+	    error('Unable to add default output file type ',
+		  "[$default_outfile_opt] due to redundant flags: [",
+		  join(',',getDupeFlags($get_opt_str)),'].');
+	    $default_outfile_opt = $get_opt_str;
+	    return(undef);
+	  }
+	$default_outfile_opt = $get_opt_str;
+
 	$default_outfile_added = 1;
 	$default_outfile_id    = scalar(@$input_files_array);
-	$get_opt_str           = 'outfile|output-file=s';
 	#The descriptions are added below
       }
 
@@ -1075,7 +1202,7 @@ sub addOutfileOption
     if(!isGetOptStrValid($get_opt_str,'outfile'))
       {
 	if($adding_default)
-	  {warning("Unable to add default --outfile (output file) option.")}
+	  {warning("Unable to add default output file option.")}
 	else
 	  {
 	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
@@ -1237,6 +1364,8 @@ sub addOutfileOption
 		    undef,$hidden,'outfile',$flagless,$primary,$format_desc,
 		    $file_type_index));
 
+    my $usage_index = $#{$usage_array};
+
     ##
     ## Create a hidden outfile_suffix_array element for the faux input file
     ##
@@ -1257,9 +1386,17 @@ sub addOutfileOption
     #We need to return the suffix_id returned by addOutfileSuffixOption so that
     #getOutfile returns the correct output file name.
 
-    return(addOutfileSuffixOption($hidden_opt_str,$file_type_index,undef,1,
-				  $primary,'',1,'',$error_message,
-				  $error_message,$collid_mode));
+    my $suffix_id =
+      addOutfileSuffixOption($hidden_opt_str,$file_type_index,undef,1,$primary,
+			     '',1,'',$error_message,$error_message,
+			     $collid_mode);
+
+    #TODO: This will change with requirement 280
+    #This will overwrite the value set by addOutfileSuffixOption so that we get
+    #the actual usage hash of the desired option
+    $outf_to_usage_hash->{$suffix_id} = $usage_index;
+
+    return($suffix_id);
   }
 
 #This method checks whether a file type (infile or outfile) is required.
@@ -1344,12 +1481,13 @@ sub getOutfileSuffixFlag
 sub getOutdirFlag
   {
     ##TODO: The outdir options need to be fixed. See requirement 178
-    return($outdir_flag_array->[0]);
+    return(defined($outdir_flag_array->[0]) ?
+	   $outdir_flag_array->[0] : (getOptStrFlags($default_outdir_opt))[0]);
   }
 
 #Returns the suffix sub-index in the array indexed the same as the file type
 #index gotten from addInfileOption
-#Globals used: $outfile_suffix_array, $input_files_array
+#Globals used: $outfile_suffix_array, $input_files_array, $outf_to_usage_hash
 sub addOutfileSuffixOption
   {
     debug({LEVEL => -1},"Params sent in BEFORE: [",
@@ -1424,9 +1562,19 @@ sub addOutfileSuffixOption
 	debug({LEVEL => -1},'Setting default values for ',
 	      'addOutfileSuffixOption.');
 
+	$get_opt_str = removeDupeFlags($default_outfile_suffix_opt);
+	if(!defined($get_opt_str) || $get_opt_str eq '')
+	  {
+	    error('Unable to add default output file suffix type ',
+		  "[$default_outfile_suffix_opt] due to redundant flags: [",
+		  join(',',getDupeFlags($get_opt_str)),'].');
+	    $default_outfile_suffix_opt = $get_opt_str;
+	    return(undef);
+	  }
+	$default_outfile_suffix_opt = $get_opt_str;
+
 	$default_outfile_suffix_added = 1;
 	$default_outfile_suffix_id    = scalar(@$suffix_id_lookup);
-	$get_opt_str                  = 'o|outfile-extension|outfile-suffix=s';
 	$required                     = 0;
 	$loc_collid_mode              = getCollisionMode(undef,'suffix');
 	##TODO: Use a command line flag specific to the outfile type instead of the current def_collide_mode which applies to all outfile types.  Create the flag when the outfile suffix option is created (but only if the programmer specified that the user is to choose).  See requirement 114
@@ -1532,7 +1680,7 @@ sub addOutfileSuffixOption
     if(!isGetOptStrValid($get_opt_str,'suffix'))
       {
 	if($adding_default)
-	  {warning("Unable to add default -o (output file suffix) option.")}
+	  {warning("Unable to add default output file suffix option.")}
 	else
 	  {
 	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
@@ -1644,8 +1792,8 @@ sub addOutfileSuffixOption
 		  'overwrite without --overwrite.  Supplying an empty ',
 		  'string will effectively treat the input file name (',
 		  getFileFlag($file_type_index),
-		  ') as a stub (may be used with --outdir as well).  ',
-		  'When standard input is detected and no stub is ',
+		  ') as a stub (may be used with ',getOutdirFlag(),' as ',
+		  'well).  When standard input is detected and no stub is ',
 		  'provided via ',
 		  getFileFlag($file_type_index),
 		  ', appends to the string "STDIN".  Does ',
@@ -1672,6 +1820,9 @@ sub addOutfileSuffixOption
 	       $primary,
 	       $format_desc,
 	       $suffix_id);
+
+    #TODO: This will change with requirement 280
+    $outf_to_usage_hash->{$suffix_id} = $#{$usage_array};
 
     return($suffix_id);
   }
@@ -2381,9 +2532,19 @@ sub addOutdirOption
 	    return(undef);
 	  }
 
+	$get_opt_str = removeDupeFlags($default_outdir_opt);
+	if(!defined($get_opt_str) || $get_opt_str eq '')
+	  {
+	    error('Unable to add default output directory type ',
+		  "[$default_outdir_opt] due to redundant flags: [",
+		  join(',',getDupeFlags($get_opt_str)),'].');
+	    $default_outdir_opt = $get_opt_str;
+	    return(undef);
+	  }
+	$default_outdir_opt = $get_opt_str;
+
 	$default_outdir_added = 1;
-	$get_opt_str = 'outdir=s';
-	$required    = 0;
+	$required             = 0;
 	#The descriptions are added below
       }
 
@@ -2403,7 +2564,7 @@ sub addOutdirOption
 	      "[$flag].  Files of different output types cannot currently be ",
 	      'put in different outdirs, but different sets can go in ',
 	      'different dirctories.  See `--help --extended` for examples ',
-	      'using the sample --outdir option.');
+	      'using the sample ',getOutdirFlag(),' option.');
 	quit(-7);
       }
 
@@ -2425,8 +2586,7 @@ sub addOutdirOption
     if(!isGetOptStrValid($get_opt_str,'outdir'))
       {
 	if($adding_default)
-	  {warning("Unable to add default --outdir (output directory) ",
-		   "option.")}
+	  {warning("Unable to add default output directory option.")}
 	else
 	  {
 	    error("Invalid GetOpt parameter flag definition: [$get_opt_str] ",
@@ -4169,7 +4329,8 @@ sub addDefaultFileOptions
 	$usage_array->[$usage_file_indexes->[$first_infile_type]]->{DETAILS} .=
 	  $detailsadd;
 	$usage_array->[$usage_file_indexes->[$first_infile_type]]->{DEFAULT} .=
-	  $defaultadd;
+	  ($usage_array->[$usage_file_indexes->[$first_infile_type]]->{DEFAULT}
+	   eq '' ? $defaultadd : ($defaultadd eq '' ? '' : " or $defaultadd"));
       }
 
     #If the programmer did not assign any multi-value option as 'flagless', set
@@ -4197,9 +4358,24 @@ sub addDefaultFileOptions
     my $num_outfile_types = scalar(keys(%$outfile_types_hash));
     my $num_suffix_types  = getNumSuffixTypes();
 
+    #Add a default outfile suffix type if none was added and either no outfile
+    #types were added or the first primary outfile type has something other
+    #than a 1:M relationship
+    my $add_outf_suff =
+      ($num_suffix_types == 0 &&
+       ($num_outfile_types == 0 || !isFirstPrimaryOut1toM()));
+
     #If the programmer did not add an outfile suffix option
-    if($num_suffix_types == 0)
-      {addOutfileSuffixOption()}
+    if($add_outf_suff)
+      {
+	debug({LEVEL => -1},"Adding default outfile suffix option because ",
+	      "the number of suffix types added [$num_suffix_types] == 0 and ",
+	      "(the number of outfile types [$num_outfile_types] == 0 or the ",
+	      "first primary outfile type had [",(isFirstPrimaryOut1toM() ?
+						  'at least 1' : 'no'),
+	      "] 1:M relationships defined with input files.");
+	addOutfileSuffixOption();
+      }
 
     #If the programmer did not add an outfile option
     if($num_outfile_types == 0)
@@ -4250,13 +4426,52 @@ sub addDefaultFileOptions
       {addOutdirOption()}
   }
 
+#Returns true if the first (primary/required/unhidden) outfile type is 1:M
+sub isFirstPrimaryOut1toM
+  {
+    my $prim_suff_usg_hash = getFirstPrimaryOutUsageHash(0);
+
+    #If there was no hash returned, return false
+    if(scalar(keys(%$prim_suff_usg_hash)) == 0)
+      {
+	debug({LEVEL => -1},"No outfile types defined.");
+	return(0);
+      }
+
+    my($file_index,$suffix_index);
+    if($prim_suff_usg_hash->{OPTTYPE} eq 'suffix')
+      {
+	($file_index,$suffix_index) =
+	  @{$suffix_id_lookup->[$prim_suff_usg_hash->{FILEID}]};
+      }
+    else
+      {
+	$file_index   = $prim_suff_usg_hash->{FILEID};
+	$suffix_index = 0;
+      }
+
+    my $relats = [map {$_->[2]}
+		  grep {$file_index == $_->[0]}
+		  @$required_relationships];
+    my $relat = (scalar(@$relats) ? $relats->[0] : '');
+
+    debug({LEVEL => -1},"Relationship of primary out type [$file_index]: ",
+	  "[$relat].");
+
+    if($relat eq '1:M')
+      {return(1)}
+
+    return(0);
+  }
+
+#Globals used: $usage_hash, $outfile_types_hash
 sub getFirstPrimaryOutUsageHash
   {
     my $get_suffix = $_[0];
     foreach my $usage_hash (sort {
-      #Primary options first. Of primary options, required first. Of primary-
+      #Primary options first.  Of primary options, required first. Of primary-
       #required options, unhidden first.  The first primary required unhidden
-      #option will ne returned
+      #option will be returned
       $b->{PRIMARY} <=> $a->{PRIMARY} || $b->{REQUIRED} <=> $a->{REQUIRED} ||
 	$a->{HIDDEN} <=> $b->{HIDDEN}}
 			    grep {$get_suffix ? ($_->{OPTTYPE} eq 'suffix') :
@@ -4271,8 +4486,7 @@ sub getFirstPrimaryOutUsageHash
 	  {next}
 	return($usage_hash);
       }
-    debug(#{LEVEL => -1},
-	  "There were no suffix IDs found for outfile type ",
+    debug({LEVEL => -1},"There were no suffix IDs found for outfile type ",
 	  "defined by ",($get_suffix ? 'suffix' : 'outfile name'));
     return({});
   }
@@ -6964,9 +7178,11 @@ sub debug
       }
 
     #Grab the options from the parameter array
-    my($opts,@params)  = getStrSubParams(['LEVEL'],@_);
+    my($opts,@params)  = getStrSubParams(['LEVEL','DETAIL'],@_);
     my $message_level  = (exists($opts->{LEVEL}) && defined($opts->{LEVEL}) ?
 			  $opts->{LEVEL} : 1);
+    my $detail         = $opts->{DETAIL};
+    my $detail_alert   = "Supply --extended for additional details.";
 
     #Return if $DEBUG level is greater than a negative message level at which
     #this message is printed or if $DEBUG level is less than a positive message
@@ -6984,6 +7200,17 @@ sub debug
     push(@debug_message,'') unless(scalar(@debug_message));
     pop(@debug_message) if(scalar(@debug_message) > 1 &&
 			   $debug_message[-1] !~ /\S/);
+
+    #If DETAIL was supplied/defined and $quiet is defined (implying that the
+    #command line has been processed), append a detailed message based on the
+    #value of $extended
+    if(defined($detail) && defined($quiet))
+      {
+	if($extended)
+	  {push(@debug_message,$detail)}
+	else
+	  {push(@debug_message,$detail_alert)}
+      }
 
     my $leader_string = "DEBUG$debug_number:";
     my $simple_leader = $leader_string;
@@ -7059,7 +7286,9 @@ sub debug
 	      $debug_str,
 	      $leader_string,
 	      $simple_string,
-	      $simple_leader]);
+	      $simple_leader,
+	      $detail,
+	      $detail_alert]);
       }
 
     #Reset the verbose states if verbose is true
@@ -7774,7 +8003,7 @@ sub printRunReport
 #in.  If there is only one input file in that array, it will be considered to
 #be a file name "stub" to be used to append outfile suffixes.
 
-#Globals used: $skip_existing
+#Globals used: $skip_existing, $collid_modes_array
 sub getFileSets
   {
     my $file_types_array = $_[0]; #A 3D array where the outer array specifies
@@ -7817,8 +8046,7 @@ sub getFileSets
                                   #provided, the returned outfile array will
                                   #contain outfile stubs to which you must
                                   #append your own suffix.
-    my $loc_collid_mode = getCollisionMode(undef,undef,$_[3]);
-                                  #The user can over-ride individual settings.
+    my $loc_collid_mode = $_[3];  #The user can over-ride individual settings.
                                   #If user_collide_mode has a value, use it,
                                   #otherwise, if individual collision modes for
                                   #each outfile type were provided, use it/
@@ -8073,9 +8301,47 @@ sub getFileSets
     ##
     ## Error-check/fix the loc_collid_mode (a 2D array of strings)
     ##
+    #First, we will try to retrieve the defaults
+    if(!defined($loc_collid_mode))
+      {
+	$loc_collid_mode = $collid_modes_array;
+	debug({LEVEL => -1},"Collision mode was defined as a [",
+	      (ref($loc_collid_mode) eq '' ?
+	       'SCALAR' : "Reference to a " . ref($loc_collid_mode)),"].");
+      }
+    elsif(defined($loc_collid_mode) && ref($loc_collid_mode) eq '')
+      {$loc_collid_mode = getCollisionMode(undef,undef,$loc_collid_mode)}
+    #If the array is the right structure, confirm the collision modes set, in
+    #case the user changed it on the command line
+    if(defined($loc_collid_mode) && ref($loc_collid_mode) eq 'ARRAY' &&
+       scalar(grep {defined($_) && ref($_) eq 'ARRAY'} @$loc_collid_mode))
+      {
+	debug({LEVEL => -1},"Filling in missing collision modes with default ",
+	      "values.");
+	foreach my $fti (0..$#{$outfile_suffixes})
+	  {
+	    my $sub_array = $outfile_suffixes->[$fti];
+	    foreach my $sti (0..$#{$outfile_suffixes->[$fti]})
+	      {
+		my $suffix_id = getSuffixID($fti,$sti);
+		my $urec = getOutfileUsageHash($suffix_id);
+		if(!defined($urec))
+		  {error("Unable to determine default collision mode for ",
+			 "output file type [$fti,$sti].")}
+		#If the user supplied --collide-mode, the supplied mode might
+		#end up changed
+		else
+		  {$loc_collid_mode->[$fti]->[$sti] =
+		      getCollisionMode(undef,
+				       $urec->{OPTTYPE},
+				       $loc_collid_mode->[$fti]->[$sti])}
+	      }
+	  }
+      }
+    #Now let's check that everything is properly set with the collision modes
     if(ref($loc_collid_mode) ne 'ARRAY')
       {
-	#Allow them to submit scalars of everything
+	#Allow the programmer to submit scalars of everything
 	if(ref(\$loc_collid_mode) eq 'SCALAR')
 	  {
 	    #Copy this value to all places corresponding to outfile_suffixes
@@ -8223,10 +8489,17 @@ sub getFileSets
 	       ((ref($outdir_array) eq 'ARRAY' && scalar(@$outdir_array)) ||
 		ref(\$outdir_array) eq 'SCALAR'))
 	      {
-		error("You cannot use --outdir and embed a directory path in ",
-		      "the outfile stub (-i with a single argument when ",
-		      "redirecting standard input in).  Please use one or ",
-		      "the other.");
+		error("You cannot use ",getOutdirFlag()," and embed a ",
+		      "directory path in the outfile stub.  Please use one ",
+		      "or the other.",
+		      {DETAIL =>
+		       join('',
+			    ('Any input file option (e.g. -i) can be treated ',
+			     'as a stub for creating output file names when ',
+			     'there is input on standard in and only one ',
+			     'value is supplied to the input file option, ',
+			     'but it cannot contain a directory path when an ',
+			     'output directory is supplied.'))});
 		quit(-42);
 	      }
 	  }
@@ -8553,14 +8826,13 @@ sub getFileSets
     ## Create sets/combos (handling the default stub and prepending outdirs)
     ##
     my($infile_sets_array,$outfiles_sets_array,$stub_sets_array);
+    my $source_hash = {};
     if(defined($outdir_array) && scalar(@$outdir_array) &&
        scalar(grep {scalar(@$_)} @$outdir_array))
       {
 	debug({LEVEL => -99},"outdir array has [",scalar(@$outdir_array),
 	      "] members.");
 
-	my $unique_out_check      = {};
-	my $nonunique_found       = 0;
 	my $tmp_infile_sets_array = getMatchedSets($file_types_array);
 
 	foreach my $infile_set (@$tmp_infile_sets_array)
@@ -8572,8 +8844,9 @@ sub getFileSets
 	    my $stub_set = [];
 	    my $dirname = defined($infile_set->[-1]) ? $infile_set->[-1] : '';
 	    #For every file (except the last one (which is an output directory)
-	    foreach my $file (@{$infile_set}[0..($#{$infile_set} - 1)])
+	    foreach my $fileidx (0..($#{$infile_set} - 1))
 	      {
+		my $file = $infile_set->[$fileidx];
 		my $stub = $file;
 		if(defined($stub))
 		  {
@@ -8593,15 +8866,7 @@ sub getFileSets
 
 		    push(@$stub_set,$new_outfile_stub);
 
-		    $unique_out_check->{$new_outfile_stub}->{$file}++;
-
-		    #Check for conflicting output file names from multiple
-		    #different input files that will overwrite one another
-		    #(the same output file from the same input file is OK -
-		    #we'll assume they won't open it more than once
-		    if(scalar(keys(%{$unique_out_check->{$new_outfile_stub}}))
-		       > 1)
-		      {$nonunique_found = 1}
+		    $source_hash->{$new_outfile_stub}->{$file}++;
 		  }
 		else
 		  {push(@$stub_set,$stub)}
@@ -8609,25 +8874,6 @@ sub getFileSets
 	    push(@$infile_sets_array,
 		 [@{$infile_set}[0..($#{$infile_set} - 1)]]);
 	    push(@$stub_sets_array,$stub_set);
-	  }
-
-	if($nonunique_found)
-	  {
-	    error('Ouput file name conflict.  Please make sure each input ',
-		  'file (from a different source directory) outputs to a ',
-		  'different output directory or that the input file names ',
-		  'are not the same.  Offending file stub conflicts: [',
-		  join(',',map {"stub $_ is generated by [" .
-				  join(',',
-				       keys(%{$unique_out_check->{$_}})) .
-					 "]"}
-		       (grep {scalar(keys(%{$unique_out_check->{$_}})) > 1}
-			keys(%$unique_out_check))),'].');
-
-	    #An exit code of -1 will quit even if --force is supplied.  --force
-	    #is intended to over-ride programmatic errors.  --overwrite is
-	    #intended to over-ride existing files.
-	    quit(-1);
 	  }
       }
     else
@@ -8637,8 +8883,14 @@ sub getFileSets
 
 	#Replace any dashes with the outfile stub
 	foreach my $stub_set (@$stub_sets_array)
-	  {foreach my $stub (@$stub_set)
-	     {$stub = $outfile_stub if(defined($stub) && $stub eq '-')}}
+	  {
+	    foreach my $stub (@$stub_set)
+	      {
+		$stub = $outfile_stub if(defined($stub) && $stub eq '-');
+
+		$source_hash->{$outfile_stub}->{$outfile_stub}++;
+	      }
+	  }
       }
 
     #debug({LEVEL => -1},"Stubs before making them unique: ",
@@ -8655,7 +8907,8 @@ sub getFileSets
      $stub_sets_array,
      $skip_sets) = makeCheckOutputs($stub_sets_array,
 				    $outfile_suffixes,
-				    $loc_collid_mode);
+				    $loc_collid_mode,
+				    $source_hash);
 
     if($skip_existing && scalar(grep {$_} @$skip_sets))
       {
@@ -8697,6 +8950,7 @@ sub getFileSets
     return($infile_sets_array,$outfiles_sets_array,$stub_sets_array);
   }
 
+#Globals used: collid_modes_array
 sub recordOutfileModes
   {
     my $outfiles_sets_array = (defined($_[0]) ? $_[0] : $output_file_sets);
@@ -8730,6 +8984,9 @@ sub getCollisionMode
     my $outfile_type  = $_[1]; #'outfile' or 'suffix', i.e. called from
                                #addOutfile[Suffix]Option
     my $supplied_mode = $_[2];
+
+    if(defined($supplied_mode) && ref($supplied_mode) ne '')
+      {error("getCollisionMode - Third option must be a scalar.")}
 
     #Return the default collision mode is no file name supplied
     if(!defined($outfile))
@@ -10109,12 +10366,15 @@ sub GetNextIndepCombo
 #ASSUMES that user_collide_modes 2D array is properly populated.
 sub makeCheckOutputs
   {
-    my $stub_sets          = copyArray($_[0]);#REQUIRED 2D array of stub combos
-    my $suffixes           = $_[1]; #OPTIONAL (Requires $_[2])
-    my $collide_modes      = $_[2];
-    my $index_uniq         = [map {{}} @{$stub_sets->[0]}]; #Array of hashes
-    my $is_index_unique    = [map {1} @{$stub_sets->[0]}];
-    my $delim              = '.';
+    my $stub_sets           = copyArray($_[0]);#REQUIRD 2D array of stub combos
+    my $suffixes            = $_[1]; #OPTIONAL (Requires $_[2])
+    my $collide_modes       = $_[2];
+    my $stub_source_hash    = $_[3];
+
+    my $outfile_source_hash = {};
+    my $index_uniq          = [map {{}} @{$stub_sets->[0]}]; #Array of hashes
+    my $is_index_unique     = [map {1} @{$stub_sets->[0]}];
+    my $delim               = '.';
 
     debug({LEVEL => -2},"Called.");
 
@@ -10307,6 +10567,10 @@ sub makeCheckOutputs
 			    ->{$type_index}
 			      ->{$collide_modes->[$type_index]->[$cnt]}++;
 
+			$outfile_source_hash
+			  ->{$outfiles_sets->[-1]->[$type_index]->[-1]} =
+			    $stub_source_hash->{$stub_set->[$type_index]};
+
 			$cnt++;
 		      }
 		  }
@@ -10411,27 +10675,62 @@ sub makeCheckOutputs
 		 map {values(%$_)} values(%$unique_hash)))
       {
 	my @report_errs =
-	  grep {my $k = $_;scalar(grep {exists($_->{error}) && $_->{error} > 0}
+	  grep {my $k = $_;scalar(grep {(exists($_->{error}) &&
+					 $_->{error} > 1) ||
+					   (exists($_->{rename}) &&
+					    $_->{rename} > 1)}
 				  values(%{$unique_hash->{$k}}))}
 	    keys(%$unique_hash);
-	@report_errs = (@report_errs[0..8],'...')
-	  if(scalar(@report_errs) > 10);
+	@report_errs = (@report_errs[0..2],'...')
+	  if(scalar(@report_errs) > 3);
 	error("Output file name conflict",
 	      (scalar(@report_errs) > 1 ? 's' : '')," detected: [",
-	      join(',',@report_errs),"].",
+	      join(',',@report_errs),"].  ",
+	      (scalar(@report_errs) > 1 ? 'These files are' : 'This file is'),
+	      " generated by multiple input files of the same name: [",
+	      join(',',map {'(' .
+			      join(',',keys(%{$outfile_source_hash->{$_}})) .
+				") -> $_"} grep {$_ ne '...'} @report_errs),
+	      "].",
 	      {DETAIL =>
-	       join('',("The collision modes [(",
+	       join('',("Please make sure each input file (from a different ",
+			"source directory) outputs to a different output ",
+			"directory and that the input file names are not the ",
+			"same.  Also, when submitting multiple types of ",
+			"input files, there must be a different output file ",
+			"associated with each combination of input files.  ",
+			"Check your input files for duplicates and that your ",
+			"output file type is associated with input files in ",
+			"a ONETOONE relationship.  Behavior upon file name ",
+			"conflict detection is determined by the collision ",
+			"mode set when the output file type was created (see ",
+			"addOutfileOption, addOutfileSuffixOption, and ",
+			"addOutfileTagteamOption).  At least one of the ",
+			"collision modes for the affected files: [(",
 			join('),(',map {defined($_) ? join(',',@$_) : 'undef'}
-			     @{$collide_modes}),"})] for these files is set ",
-			"to cause an error if multiple input files output to ",
-			"the same output file.  There must be a different ",
-			"output file name for each combination of input ",
-			"files.  Please check your input files for ",
-			"duplicates.  This error may be circumvented by ",
-			"--force and either --overwrite or --skip-existing, ",
-			"but it is heavily discouraged - only use for ",
-			"testing."))});
-	quit(-57);
+			     @{$collide_modes}),"})] is set to cause an ",
+			"error if multiple input files output to the same ",
+			"output file.  This error may be circumvented by ",
+			"setting the COLLISIONMODE to either 'merge' or ",
+			"'rename' via either those methods or by changing ",
+			"the default using setDefaults if its not set in one ",
+			"of those methods.  Note, 'rename' will only resolve ",
+			"conflicts involving multiple types of input files.  ",
+			"It will not rename input files that have the same ",
+			"name but reside in different source directories, ",
+			"even if multiple file types' renamed files ",
+			"conflict.  To temporarily change the collision mode ",
+			"globally for all output file types, supply ",
+			"`--collision-mode VALUE`, where VALUE={error,merge,",
+			"rename}.  To force past this error without changing ",
+			"the collision mode, use --force and either ",
+			"--overwrite or --skip-existing, but this is heavily ",
+			"discouraged - only use for testing."))});
+
+	#An exit code of -1 will quit even if --force is supplied.  --force
+	#is intended to over-ride programmatic errors.  --overwrite is
+	#intended to over-ride existing files.
+	quit(-1);
       }
     #Quit if any of the outfiles created already exist
     else
@@ -11161,8 +11460,8 @@ sub processDefaultOptions
     if(defined($user_collide_mode) && $user_collide_mode ne '' &&
        $user_collide_mode !~ /^[mer]/i)
       {
-	error("Invalid --collision-mode: [$user_collide_mode].  Acceptable values ",
-	      "are: [merge, rename, or error].  Check usage for an ",
+	error("Invalid --collision-mode: [$user_collide_mode].  Acceptable ",
+	      "values are: [merge, rename, or error].  Check usage for an ",
 	      "explanation of what these modes do.");
 	quit(-65);
       }
@@ -11709,6 +12008,7 @@ end_print
 	my $header = '                 ' .
 	  join("\n                 ",split(/\n/,getHeader()));
 
+	my $odf = getOutdirFlag();
 	print << "end_print";
 ADVANCED
 ========
@@ -11729,7 +12029,7 @@ $header
                     line that was used to create it.
 
                  2. The header is used to confirm that a file inside a
-                    directory that is to be output to (using --outdir) was
+                    directory that is to be output to (using $odf) was
                     created by this script before deleting it when in overwrite
                     mode.  See OVERWRITE PROTECTION below.
 
@@ -11738,14 +12038,14 @@ $header
                         pre-existing files before any output is generated.  It
                         will even check if future output files will be over-
                         written in case two input files from different
-                        directories have the same name and a common --outdir.
+                        directories have the same name and a common $odf.
                         Furthermore, before output starts to a given file, a
                         last-second check is performed in case another program
                         or script instance is competing for the same output
                         file.  If such a case is encountered, an error will be
                         generated and the file will always be skipped.
 
-                        Directories: When --outdir is supplied with
+                        Directories: When $odf is supplied with
                         --overwrite, the directory and its contents will not be
                         deleted.  If you would like an output directory to be
                         automatically removed, supply --overwrite twice on the
@@ -11785,13 +12085,13 @@ Only one mode may be saved as a default run mode.
 * ADVANCED FILE I/O FEATURES:
 
 Sets of input files, each with different output directories can be supplied.
-Supply each file set with an additional -i (or --input-file) flag.  Wrap each
-set of files in quotes and separate them with spaces.
+Supply each file set with an additional (e.g.) -i flag.  Wrap each set of files
+in quotes and separate them with spaces.
 
-Output directories (--outdir) can be supplied multiple times in the same order
-so that each input file set can be output into a different directory.  If the
-number of files in each set is the same, you can supply all output directories
-as a single set instead of each having a separate --outdir flag.
+Output directories (e.g.) --outdir can be supplied multiple times in the same
+order so that each input file set can be output into a different directory.  If
+the number of files in each set is the same, you can supply all output
+directories as a single set instead of each having a separate --outdir flag.
 
 Examples:
 
@@ -12498,6 +12798,7 @@ sub usage
 	     " for usage.\n")}
     else
       {
+	my $odf = getOutdirFlag();
 	if(!$local_extended)
 	  {
 	    print($short);
@@ -12512,14 +12813,14 @@ end_print
 			  $defaults_dir : (sglob('~/.rpst'))[0]);
 	    $defdir = 'undefined' if(!defined($defdir));
 	    print($long);
-	    print << 'end_print';
+	    print << "end_print";
      --verbose            OPTIONAL Verbose mode/level.  (e.g. --verbose 2)
      --quiet              OPTIONAL Quiet mode.
      --overwrite          OPTIONAL Overwrite existing output files.  By
                                    default, existing output files will not be
                                    over-written.  Supply twice to safely*
                                    remove pre-existing output directories (see
-                                   --outdir).  Mutually exclusive with
+                                   $odf).  Mutually exclusive with
                                    --skip-existing and --append.
                                    *Will not remove a directory containing
                                    manually touched files.
@@ -12577,7 +12878,7 @@ end_print
 	#Hidden advanced options - not yet fully implemented
 	if($local_extended > 1)
 	  {
-	    print << 'end_print';
+	    print << "end_print";
      --collision-mode     OPTIONAL [error]{merge,rename,error} When
                                    multiple input files output to the same
                                    output file, this option specifies what to
@@ -12591,7 +12892,7 @@ end_print
                                    throw an error if a unique file name cannot
                                    be constructed (e.g. when 2 input files of
                                    the same name in different directories are
-                                   outputting to a common --outdir).  Error
+                                   outputting to a common $odf).  Error
                                    mode causes the script to quit with an error
                                    if multiple input files are detected to
                                    output to the same output file.
@@ -12624,7 +12925,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.082';
+    $VERSION       = '4.093';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
@@ -13034,7 +13335,7 @@ The return value is an input file type ID that is later used to obtain the files
 
 REQUIRED indicates whether CommandLineInterface should fail with an error if the user does not supply a required file type.  The value can be either 0 (false) or non-zero (e.g. "1") (true).
 
-A default file name or glob pattern can be provided.  The value supplied to default may be a glob/string (interpreted as a series of files supplied to the first instance of the associated flag on the command line), a reference to an array of globs/strings (also interpreted as a series of files), or a 2D array of globs/strings (where each inner array is considered as a series of globs/strings supplied via a different instance of the associated flag on the command line).  If the user explicitly supplies any number of files on the command line, all default files will be ignored (not added).
+A DEFAULT file name or glob pattern can be provided.  The value supplied to DEFAULT may be a glob/string (interpreted as a series of files supplied to the first instance of the associated flag on the command line), a reference to an array of globs/strings (also interpreted as a series of files), or a 2D array of globs/strings (where each inner array is considered as a series of globs/strings supplied via a different instance of the associated flag on the command line).  If the user explicitly supplies any number of files on the command line, all default files will be ignored (not added).
 
 There can be only one PRIMARY input file type.  Making an input file type 'PRIMARY' (0 (false) or non-zero (e.g. "1") (true)) does 2 things: 1. PRIMARY files can be submitted without the indicated flag.  (Note, they are still grouped by wrapping in quotes and they are still globbed.)  2. The PRIMARY file type can be supplied on STDIN (standard in, via a pipe or redirect).  Note, if there is a single value supplied to a PRIMARY file type's flag and STDIN is present, the value supplied to the flag is treated as a stub for creating output files with the outfile suffix option(s).
 
@@ -13105,6 +13406,8 @@ A 'MANYTOMANY' PAIR_RELAT is not supported yet.  This will be addressed when req
 The only supported static number of files for PAIR_RELAT is 'ONE'.  While strings like '1:1', '1:M', and '1:1orM' are supported, '1' and 'M' cannot be replaced by some other static integer, e.g. to require one file type to be supplied 1 file for every 4 of another file.  This may be implemented in the future.
 
 I<ADVANCED>
+
+addInfileOption() is called automatically with a default input file flag (-i, and other alternate flags) at runtime if no input file option was explicitly added.  If a flag (e.g. '-i') was already used for another option, it is removed and an alternate flag is used.
 
 Multiple values supplied to a PRIMARY file type's flag when STDIN is present causes STDIN to be treated as an additional file parameter to the flag, mixed in with the named input files (i.e. there is no stub).  In these instances, the STDIN input will be named 'STDIN' when used to create output file names with the outfile suffix option(s).
 
@@ -13307,7 +13610,7 @@ Adds an output file option to the command line interface.  The flag is defined b
 
 The return value is an output file type ID that is later used to obtain the output file names constructed from the output file names and output directory name(s) that the user has supplied on the command line (see getOutfile() and getNextFileGroup()).
 
-COLLISIONMODE is an advanced feature that determines how to handle situations where 2 or more combinations of input files end up specifying the same output file as where their output will go.
+COLLISIONMODE is an advanced feature that determines how to handle situations where 2 or more combinations of input files end up generating output into the same output file.
 
 For example, if a pair of files has a ONETOMANY relationship, and the 'one' file is what has been assigned an outfile suffix, multiple combinations of that file with different input files of the 'many' type will have the same output file.  Or, if 2 input files in different source directories are being appended a suffix and an output directory has been supplied, those output file names will collide.  COLLISIONMODE is what determines what will happen in that situation.
 
@@ -13382,7 +13685,7 @@ None.
 
 I<ADVANCED>
 
-A COLLISIONMODE of 'rename' handles conflicting output file names by compounding them with input file names.  All of the files in the file set advanced to by the nextFileCombo() iterator are evaluated and the fewest number of input file names are concatenated together with the output file name as is needed to make the output file names unique.
+A COLLISIONMODE of 'rename' handles conflicting output file names by appending the input file names they are associated with.  All of the files in the file set returned by the nextFileCombo() iterator are evaluated, and the fewest number of input file names are concatenated together with the output file name as is needed to make the output file names unique.
 
 =item C<addOutfileSuffixOption> GETOPTKEY, FILETYPEID [, GETOPTVAL, COLLISIONMODE, REQUIRED, PRIMARY, DEFAULT, HIDDEN, SMRY_DESC, DETAIL_DESC, FORMAT_DESC]
 
@@ -13394,7 +13697,7 @@ FILETYPEID is the ID of the input file type returned by addInfileOption() indica
 
 Since output file names are constructed automatically and retrieved by getOutfile(), the GETOPTVAL option is not required (and is in fact discouraged).  But if you want to be able to obtain the suffix to construct custom file names (which note, will not have the full overwrite protection provided by CommandLineInterface), you can provide a reference to a scalar so that after the command line is processed, you will have the suffix provided by the user.  Note also that DEFAULT is what is used as the suffix when the user does not provide one.  The pre-existing value of GETOPTVAL is ignored.
 
-COLLISIONMODE is an advanced feature that determines how to handle situations where 2 or more combinations of input files end up specifying the same output file as where their output will go.
+COLLISIONMODE is an advanced feature that determines how to handle situations where 2 or more combinations of input files end up generating output into the same output file.
 
 For example, if a pair of files has a ONETOMANY relationship, and the 'one' file is what has been assigned an outfile suffix, multiple combinations of that file with different input files of the 'many' type will have the same output file.  Or, if 2 input files in different source directories are being appended a suffix and an output directory has been supplied, those output file names will collide.  COLLISIONMODE is what determines what will happen in that situation.
 
@@ -13578,7 +13881,7 @@ I<ADVANCED>
 
 The output file ID that is returned is actually a tagteam ID.  When getOutfile() is called with the ID, it checks the ID to see if it is a tagteam ID.  If it is, it checks to see which of the two options in the tagteam were supplied by the user and returns the corresponding output file name (whether it was created using an input file name, or supplied as a full output file name by the user.
 
-The default COLLISIONMODE is different for the 2 types of options.  The default mode for the suffix option is 'error'.  I.e. If 2 file names are constructed with the same name/path, a fatal error occurs, preventing the script from processing any files.  The default mode for the create outfile option is 'merge', meaning if an output file name is supplied multiple times, the output is aggregated in that file (not overwritten).
+The default COLLISIONMODE_* is different for the 2 types of options.  The default mode for the suffix option is 'error'.  I.e. If 2 file names are constructed with the same name/path, a fatal error occurs, preventing the script from processing any files.  The default mode for the create outfile option is 'merge', meaning if an output file name is supplied multiple times, the output is aggregated in that file (not overwritten).
 
 You can actually call addOutfileTagteamOption() once with no parameters to create the default output file options as long as addOutfileOption() and addOutfileSuffixOption() have not been called without any parameters.  If either addOutfileOption() or addOutfileSuffixOption() have not been called before processCommandLine() is called, they are called without any options and made into a tagteam with the first outfile option of the opposing type.  For example, if you call addOutfileSuffixOption('o=s') and never call addOutfileOption(), it is automatically called with no parameters and made into a tagteam with the -o option you explicitly created.  There is currently no way to prevent this automatic option creation, but if you do not want to allow a user to supply output files by one or the other method, you can create a hidden version of that option.
 
@@ -15333,17 +15636,17 @@ HEADER sets --header.  Can be 0 or 1.  See headerRequested().  Default is 0.
 
 ERRLIMIT sets --error-type-limit.  Unsigned integer.  See error() and warning().  Default is 5.  0 is unlimited.
 
-COLLISIONMODE sets --collision-mode as if supplied on the command line by the user.  It is an advanced feature that determines what the script does when outfile names conflict/collide.  Possible values are:
+COLLISIONMODE is an advanced feature that determines what the script does when outfile names conflict/collide.  Possible values are:
 
     error  = an error will be generated
     merge  = output is merged/concatenated together in processing order
     rename = composite output filenames are constructed by combining input file names (joined with a '.')
 
-The default value depends on how the outfile option was defined.  Output file types defined by addOutfileOption default to a collision mode of 'merge' and output file types defined by addOutfileSuffixOption default to a collision mode of 'error'.  The collision mode of all other files opened without user input is 'merge'.  Setting this value changes that default.  Unfortunately, this affects all output file types.  This will be fixed when requirement 114 is implemented.  Until then, to open output files in any mode other than 'merge', see the APPEND parameter to the openOut method.
+COLLISIONMODE sets the default behavior for all output file types that do not specify a COLLISIONMODE explicitly.  This differs from supplying --collision-mode on the command line (see `--usage --extended --extended`), which over-rides the modes set by all of the addOutfile*Option methods.
 
-Currently (until requirement 114 is implemented), all outfile options are affected.  COLLISIONMODE can be set per output file type using the COLLISIONMODE parameter in addOutfileOption() and addOutfileSuffixOption() but setting the value here over-rides those settings.  Setting COLLISIONMODE to 'merge' is the same as setting openOut's APPEND parameter explicitly to -1.  In fact, explicitly setting openOut's APPEND parameter to anything else over-rides the COLLISION 'merge' mode.
+The default value for each output file type depends on how the outfile option was defined.  Output file types defined by the addOutfileOption method, default to a collision mode of 'merge' and output file types defined by addOutfileSuffixOption default to a collision mode of 'error'.  Setting this value changes the default for both types.  This will change when requirement 114 is implemented.
 
-WARNING: Until requirement 114 has been implemented, setting COLLISIONMODE here over-rides the COLLISIONMODE parameters set in all calls to addOutfileOption() and addOutfileSuffixOption() regardless of where they are called.  However, it does not over-ride openOut's APPEND parameter.  This is because the user is intended to use --collision-mode on the command line to change the behavior of the script and setDefaults is supplying a default value for that flag.
+For functionality related to COLLISIONMODE for files not controlled by the user on the command line, see the APPEND parameter to the openOut method.  Setting COLLISIONMODE to 'merge' is the same as setting openOut's APPEND parameter explicitly to -1.  In fact, explicitly setting openOut's APPEND parameter to anything else over-rides all COLLISIONMODE settings, regardless of how they are specified.
 
 DEFRUNMODE (i.e. 'Default Run Mode') in short, determines how the script behaves either when no arguments are supplied on the command-line and all the conditions required to run are met.
 
