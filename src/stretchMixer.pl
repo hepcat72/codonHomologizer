@@ -11,7 +11,7 @@ use CodonHomologizer;
 ## Describe the script
 ##
 
-our $VERSION = '1.035';
+our $VERSION = '1.036';
 
 setScriptInfo(CREATED => '10/5/2017',
               VERSION => $VERSION,
@@ -228,12 +228,6 @@ addOption(GETOPTKEY   => 'm|method=s',
 			  "recoded in that region to match sequence A's " .
 			  'codons that were optimized for sequence B.'),
 	  ACCEPTS     => $weighting_methods);
-
-#This is only here to not show the default added suffix option
-addOutfileSuffixOption(GETOPTKEY     => 'u=s',
-		       REQUIRED      => 0,
-		       HIDDEN        => 1,
-		       FILETYPEID    => $seq_file_type);
 
 addOutdirOption(GETOPTKEY   => 'dir|outdir=s',
 		REQUIRED    => 0,
