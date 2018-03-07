@@ -121,6 +121,7 @@ my($required_infile_types,
    $default_outdir_added,
    $default_tagteam_added,
    $default_infile_opt,
+   $default_stub_opt_addendum,
    $default_outfile_suffix_opt,
    $default_outfile_opt,
    $default_outdir_opt,
@@ -261,7 +262,8 @@ sub _init
     $default_outfile_suffix_added = 0;
     $default_outdir_added         = 0;
     $default_tagteam_added        = 0;
-    $default_infile_opt           = 'i|input-file|stdin-stub|stub=s';
+    $default_infile_opt           = 'i|infile|input-file=s';
+    $default_stub_opt_addendum    = 'stub|stdin-stub';
     $default_outfile_suffix_opt   = 'o|outfile-extension|outfile-suffix=s';
     $default_outfile_opt          = 'outfile|output-file=s';
     $default_outdir_opt           = 'outdir|output-directory=s';
@@ -653,9 +655,9 @@ sub addInfileOption
     addRequiredRelationship($file_type_index,$req_with,$req_rel_str);
 
     push(@$usage_file_indexes,
-	 addToUsage($flags,$smry_desc,$detail_desc,$required,$default_str,
-		    undef,$hidden,'infile',$flagless,$primary,$format_desc,
-		    $file_type_index));
+	 addToUsage($get_opt_str,$flags,$smry_desc,$detail_desc,$required,
+		    $default_str,undef,$hidden,'infile',$flagless,$primary,
+		    $format_desc,$file_type_index));
 
     debug({LEVEL => -1},"Adding input file type [$file_type_index] as a key ",
 	  "to inf_to_usage_hash, value: [$#{$usage_array}].");
@@ -920,12 +922,26 @@ sub addRequiredRelationship
 sub getPrimaryUsageAddendums
   {
     return(',STDIN',
-	   join('',("  May be supplied on standard in.  When standard input ",
-		    "detected and ",getFileFlag($primary_infile_type),
-		    " is given only 1 argument, it will be used as a file ",
-		    "name stub for appending outfile suffixes.  See ",
-		    "--extended --help for advanced usage examples.")),
+	   join('',("  May be supplied on standard in.")),
 	   'stdin if present');
+  }
+
+#Returns a list of 3 strings: [flags,detail_desc,get_opt_str]
+sub getPrimaryStubUsageAddendums
+  {
+    my $opt_str = removeDupeFlags($default_stub_opt_addendum);
+    if(!defined($opt_str) || $opt_str eq '')
+      {
+	warning("Unable to add stub features to the primary input file type.");
+	return('','','');
+      }
+    my $flags  = join(',',getOptStrFlags($opt_str));
+    my $detail = join('',("  When standard input detected and ",
+			  getFileFlag($primary_infile_type)," is given only ",
+			  "1 argument, it will be used as a file name stub ",
+			  "for appending outfile suffixes.  See --extended ",
+			  "--help for advanced usage examples."));
+    return($flags,$detail,$opt_str);
   }
 
 sub getFlaglessUsageAddendums
@@ -1100,7 +1116,10 @@ sub removeDupeFlags
 
     #Separate the end of the get opt str from the body
     my $get_opt_str_end = $get_opt_str;
-    $get_opt_str_end =~ s/.*([=:!+].*)/$1/;
+    if($get_opt_str_end =~ /.*([=:!+].*)/)
+      {$get_opt_str_end =~ s/.*([=:!+].*)/$1/}
+    else
+      {$get_opt_str_end = ''}
     my $new_get_opt_str = $get_opt_str;
     $new_get_opt_str =~ s/[=:!+].*//;
 
@@ -1360,9 +1379,9 @@ sub addOutfileOption
       }
 
     push(@$usage_file_indexes,
-	 addToUsage($flags,$smry_desc,$detail_desc,$required,$default_str,
-		    undef,$hidden,'outfile',$flagless,$primary,$format_desc,
-		    $file_type_index));
+	 addToUsage($get_opt_str,$flags,$smry_desc,$detail_desc,$required,
+		    $default_str,undef,$hidden,'outfile',$flagless,$primary,
+		    $format_desc,$file_type_index));
 
     my $usage_index = $#{$usage_array};
 
@@ -1808,7 +1827,8 @@ sub addOutfileSuffixOption
     if(!defined($default))
       {$default = 'none'}
 
-    addToUsage($flags,
+    addToUsage($get_opt_str,
+	       $flags,
 	       $smry_desc,
 	       $detail_desc,
 	       $required,
@@ -2696,7 +2716,8 @@ sub addOutdirOption
 	$detail_desc .= $detailsadd;
       }
 
-    addToUsage($flags,
+    addToUsage($get_opt_str,
+	       $flags,
 	       $smry_desc,
 	       $detail_desc,
 	       $required,
@@ -2832,7 +2853,8 @@ sub addOption
 	 ($genopttype eq 'negbool' ? ($default ? 'On' : 'Off') : $default) .
 	   '] ' . $detail_desc}
 
-    addToUsage($flags,
+    addToUsage($get_opt_str,
+	       $flags,
 	       $smry_desc,
 	       $detail_desc,
 	       $required,
@@ -3299,7 +3321,8 @@ sub addOptions
 			 'of addOptions(), or use addToUsage() to supply a ' .
 			   'usage.';
 
-	addToUsage($flags,
+	addToUsage($get_opt_str,
+		   $flags,
 		   undef,
 		   $desc,
 		   0,
@@ -3357,20 +3380,21 @@ sub clipStr
 
 sub addToUsage
   {
-    my $flags_str   = $_[0];
-    my $smry_desc   = $_[1];
-    my $detail_desc = $_[2];
-    my $required    = $_[3];
-    my $default     = $_[4];
-    my $accepts     = $_[5]; #Array of scalars
-    my $hidden      = $_[6];
-    my $opttype     = defined($_[7]) ? $_[7] : 'scalar';
-    my $flagless    = defined($_[8]) ? $_[8] : 0;
+    my $getoptkey   = $_[0];
+    my $flags_str   = $_[1];
+    my $smry_desc   = $_[2];
+    my $detail_desc = $_[3];
+    my $required    = $_[4];
+    my $default     = $_[5];
+    my $accepts     = $_[6]; #Array of scalars
+    my $hidden      = $_[7];
+    my $opttype     = defined($_[8]) ? $_[8] : 'scalar';
+    my $flagless    = defined($_[9]) ? $_[9] : 0;
 
     #For in/out file types (used in help output)
-    my $primary     = defined($_[9]) ? $_[9] : 0;
-    my $format_desc = $_[10];
-    my $file_id     = $_[11];
+    my $primary     = defined($_[10]) ? $_[10] : 0;
+    my $format_desc = $_[11];
+    my $file_id     = $_[12];
 
     if(!defined($flags_str))
       {
@@ -3380,7 +3404,8 @@ sub addToUsage
 
     my $usage_index = scalar(@$usage_array);
 
-    push(@$usage_array,{OPTFLAG   => $flags_str,
+    push(@$usage_array,{GETOPTKEY => $getoptkey,
+			OPTFLAG   => $flags_str,
 			SUMMARY   => (defined($smry_desc) ? $smry_desc : ''),
 			DETAILS   => (defined($detail_desc) ? $detail_desc:''),
 			REQUIRED  => (defined($required) ? $required : 0),
@@ -4365,7 +4390,8 @@ sub addDefaultFileOptions
       ($num_suffix_types == 0 &&
        ($num_outfile_types == 0 || !isFirstPrimaryOut1toM()));
 
-    #If the programmer did not add an outfile suffix option
+    #If the programmer did not add an outfile suffix option and one is
+    #appropriate
     if($add_outf_suff)
       {
 	debug({LEVEL => -1},"Adding default outfile suffix option because ",
@@ -4375,6 +4401,51 @@ sub addDefaultFileOptions
 						  'at least 1' : 'no'),
 	      "] 1:M relationships defined with input files.");
 	addOutfileSuffixOption();
+      }
+
+    #If a primary outfile suffix option exists (first one is always primary),
+    #add stub addendums to the primary input file type
+    if($add_outf_suff || $num_suffix_types)
+      {
+	my($flagsadd,$detailsadd,$optstradd) = getPrimaryStubUsageAddendums();
+	if($optstradd ne '')
+	  {
+	    my $oldkey = $usage_array
+	      ->[$usage_file_indexes->[$primary_infile_type]]->{GETOPTKEY};
+	    my $newkey = $oldkey;
+	    #The infile getopt key is assumed to have '=' in it
+	    $newkey =~ s/=/$optstradd|=/;
+	    if($oldkey ne $newkey)
+	      {
+		#Set the new key in the getopt hash and update it in the usage
+		#hash
+		$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+		  ->{GETOPTKEY} = $newkey;
+		$GetOptHash->{$newkey} = $GetOptHash->{$oldkey};
+		delete($GetOptHash->{$oldkey});
+
+		#Put the stub options before STDIN or *, if either is there
+		if($usage_array->[$usage_file_indexes->[$primary_infile_type]]
+		   ->{OPTFLAG} =~ /,STDIN|,\*/)
+		  {$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+		     ->{OPTFLAG} =~ s/(,STDIN|,\*)/,$flagsadd$1/}
+		else
+		  {$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+		     ->{OPTFLAG} .= ',' . $flagsadd}
+
+		#Append the details about how to use the stub
+		$usage_array->[$usage_file_indexes->[$primary_infile_type]]
+		  ->{DETAILS} .= $detailsadd;
+	      }
+	    else
+	      {warning("Unable to add stub options to the primary input file ",
+		       "type [",
+		       getDefaultFlag($usage_array->[$usage_file_indexes
+						     ->[$primary_infile_type]]
+				      ->{OPTFLAG}),"].",
+		      {DETAIL =>
+		       "Expected '=' to be in the GetOpt hash key."})}
+	  }
       }
 
     #If the programmer did not add an outfile option
@@ -12925,7 +12996,7 @@ BEGIN
   {
     #Enable export of subs & vars
     require Exporter;
-    $VERSION       = '4.093';
+    $VERSION       = '4.094';
     our @ISA       = qw(Exporter);
     our @EXPORT    = qw(openIn                       openOut
 			closeIn                      closeOut
