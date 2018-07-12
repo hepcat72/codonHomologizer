@@ -11,7 +11,7 @@ use strict;
 ## Describe the script
 ##
 
-our $VERSION = '1.20';
+our $VERSION = '1.21';
 
 setScriptInfo(CREATED => '6/27/2017',
               VERSION => $VERSION,
@@ -769,7 +769,8 @@ while(nextFileCombo())
     if(!exists($file_seen_hash->{$codonUsageFile}))
       {$usage_buffer->{$codonUsageFile} = readUsageFile($codonUsageFile)}
     $usage_obj = $usage_buffer->{$codonUsageFile};
-    next unless(defined($usage_obj));
+    unless(defined($usage_obj))
+      {quit(13)}
 
     #If a protein file was supplied, we're going to align it, and a segment
     #file was supplied
@@ -777,7 +778,7 @@ while(nextFileCombo())
     if(defined($aaFile) && !$prealigned && defined($segmentFile))
       {
 	openIn(*AA,$aaFile) || next;
-	$aaSeqs = [getNextSeqRec(*AA,0,$aaFile)];
+	$aaSeqs = [getNextSeqRec(*AA,0,$aaFile,$seq_format)];
 	closeIn(*AA);
 
 	#Read in the segment file - returns a hash keyed on sequence ID and
@@ -817,6 +818,10 @@ while(nextFileCombo())
        !exists($file_seen_hash->{$codonUsageFile}))
       {
 	verbose("Writing matrix file.");
+	#If the user did not supply a matrix outfile and the temporary file
+	#exists, delete it to avoid overwrite protection
+	if(!defined($matrixOutFile) && -e $tmpmatfile)
+	  {unlink($tmpmatfile)}
 	writeMatrixFile($tmpmatfile,$matrix_obj);
       }
 
@@ -839,7 +844,7 @@ while(nextFileCombo())
     if(defined($aaFile) && defined($tmpalnoutfile))
       {
 	openIn(*AAALN,$tmpalnoutfile) || next;
-	my $alnSeqs = [getNextSeqRec(*AAALN,0,$tmpalnoutfile)];
+	my $alnSeqs = [getNextSeqRec(*AAALN,0,$tmpalnoutfile,'auto')];
 	closeIn(*AAALN);
 
 	push(@$nt_pair_sets,constructNTPairs($alnSeqs,$matrix_obj,$usage_obj));
@@ -852,12 +857,16 @@ while(nextFileCombo())
 
 if(defined($eval_file))
   {
-    openIn(*NTALN,$eval_file) || next;
-    my $alnSeqs = [getNextSeqRec(*NTALN,0,$eval_file)];
-    closeIn(*NTALN);
-    push(@$nt_pair_sets,getAllNTPairs($alnSeqs,$eval_file));
-    push(@$source_files,$eval_file);
-    push(@$segments_objects,$segments_obj);
+    if(!openIn(*NTALN,$eval_file))
+      {error("Unable to evaluate nucleotide alignment file [$eval_file].")}
+    else
+      {
+	my $alnSeqs = [getNextSeqRec(*NTALN,0,$eval_file,'auto')];
+	closeIn(*NTALN);
+	push(@$nt_pair_sets,getAllNTPairs($alnSeqs,$eval_file));
+	push(@$source_files,$eval_file);
+	push(@$segments_objects,$segments_obj);
+      }
   }
 
 if(scalar(@$nt_pair_sets))
@@ -1949,7 +1958,7 @@ sub aaSegmentAlign
 	my $len = 0;
 	my $segrecs = {map {$len = length($_->[1]) unless($len > 0);
 			    parseIDFromDef($_->[0]) => $_}
-		       getNextSeqRec(*AAALNSEG,0,$segoutfile)};
+		       getNextSeqRec(*AAALNSEG,0,$segoutfile,'fasta')};
 
 	#Close the file
 	closeIn(*AAALNSEG);
@@ -2003,7 +2012,7 @@ sub getMuscleMultipleAlignment
 
     my $output = `$muscle_command`;
 
-    debug("Muscle alignment done:\n$output\n");
+    debug("Muscle alignment done.");
 
     return($output);
   }
