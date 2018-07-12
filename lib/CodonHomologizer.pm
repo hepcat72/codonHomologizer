@@ -646,7 +646,8 @@ sub getNextSeqRec
 
     debug("Determining previous type");
 
-    if(!defined($main::lastfiletype) || $filetype ne 'auto')
+    if(!defined($main::lastfiletype) ||
+       (defined($filetype) && $filetype ne 'auto'))
       {
 	if($filetype eq 'fasta')
 	  {$main::getnextsub = \&getNextFastaRec}
@@ -662,7 +663,7 @@ sub getNextSeqRec
 	  {$main::getnextsub = \&getNextFastqRec}
       }
 
-    if($filetype eq 'auto' &&
+    if((!defined($filetype) || $filetype eq 'auto') &&
        (!defined($main::lastfiletype) ||
 	!exists($main::lastfiletype->{$input_file})))
       {
